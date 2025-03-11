@@ -41,6 +41,8 @@ def clone_tensors(
             return out
         else:
             raise ValueError(f"invalid clone method: {clone_method}")
+    elif isinstance(tensors, np.ndarray):
+        return np.copy(tensors)
 
     # recursive case
     if isinstance(tensors, list):
