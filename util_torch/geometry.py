@@ -54,7 +54,7 @@ def transform_points_linear(
     Efficiently transform each point by its corresponding linear transformation matrix,
     and optionally add a bias vector. Let P=pts[i], one of the input points, and let A=tmat[i], and b=bias[i],
     one of the transformation matrices and bias vectors. Then, the transformed point is given by:
-    P_new = A @ P + b
+    P_new = P @ A + b
 
     parameters
     ----------------
