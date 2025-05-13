@@ -3,6 +3,8 @@ import torch
 import kornia  # required kornia
 import numpy as np
 
+# TODO: need to test all these functions
+
 
 def transform_points_homogeneous(
     pts: torch.Tensor,
@@ -31,13 +33,13 @@ def transform_points_homogeneous(
     pts_homo[:, :D] = pts
 
     # Reshape for batch matrix multiplication
-    pts_homo = pts_homo.unsqueeze(-1)  # Shape: (N, D+1, 1)
+    pts_homo = pts_homo.unsqueeze(1)  # Shape: (N, 1, D+1)
 
-    # Perform batch matrix multiplication
-    transformed_pts_homo = torch.bmm(tmat, pts_homo)  # Shape: (N, D+1, 1)
+    # Perform batch matrix multiplication (P@tmat)
+    transformed_pts_homo = torch.bmm(pts_homo, tmat)  # Shape: (N, 1, D+1)
 
     # Convert back from homogeneous coordinates
-    transformed_pts_homo = transformed_pts_homo.squeeze(-1)  # Shape: (N, D+1)
+    transformed_pts_homo = transformed_pts_homo.squeeze(1)  # Shape: (N, D+1)
     transformed_pts = transformed_pts_homo[:, :D] / transformed_pts_homo[:, -1].unsqueeze(-1)
 
     return transformed_pts
@@ -50,7 +52,9 @@ def transform_points_linear(
 ) -> torch.Tensor:
     """
     Efficiently transform each point by its corresponding linear transformation matrix,
-    and optionally add a bias vector.
+    and optionally add a bias vector. Let P=pts[i], one of the input points, and let A=tmat[i], and b=bias[i],
+    one of the transformation matrices and bias vectors. Then, the transformed point is given by:
+    P_new = A @ P + b
 
     parameters
     ----------------
@@ -58,24 +62,28 @@ def transform_points_linear(
         Points tensor of shape (N, D) where N is number of points
         and D is dimension of each point
     tmat : torch.Tensor
-        Transformation matrices of shape (N, D, D) where
+        Transformation matrices of shape (N, D, C) where
         each matrix is for the corresponding point
     bias : torch.Tensor | None
-        Bias vector of shape (N, D), or (D,) with auto broadcasting, or None
+        Bias vector of shape (N, C), or (C,) with auto broadcasting, or None
 
     return
     ---------------
     transformed_pts : torch.Tensor
-        Transformed points of shape (N, D)
+        Transformed points of shape (N, C)
     """
-    # Apply transformation: Ax
-    transformed_pts = torch.bmm(tmat, pts.unsqueeze(-1)).squeeze(-1)
+    # Reshape points for batch matrix multiplication
+    # For P @ A transformation (xA instead of Ax)
+    # pts shape is (N, D), tmat shape is (N, D, C)
 
-    # Add bias if provided: Ax + b
+    # Apply transformation: P @ A
+    transformed_pts = torch.bmm(pts.unsqueeze(1), tmat).squeeze(1)  # Shape: (N, C)
+
+    # Add bias if provided: P @ A + b
     if bias is not None:
         # Handle bias auto broadcasting if needed
         if bias.dim() == 1:
-            # If bias is (D,), reshape to (1, D) for broadcasting
+            # If bias is (C,), reshape to (1, C) for broadcasting
             bias = bias.unsqueeze(0)
         transformed_pts = transformed_pts + bias
 
@@ -92,15 +100,15 @@ def transform_points_linear_all_to_all_with_reduce(
     This function is designed for the case where you have N points to be transformed by M different linear transformations,
     along with M bias vectors. Each point will be transformed by each of the M transformations, leading to M points.
 
-    Specifically, for point[k] in (N,D), and transformation[m] in (M,C,D),
-    the intemediate output will be a tensor of shape (N,M,C), where output[i,j] = transformation[j] @ point[i].
+    Specifically, for point[k] in (N,D), and transformation[m] in (M,D,C),
+    the intemediate output will be a tensor of shape (N,M,C), where output[i,j] = point[i] @ transformation[j].
     This function will then reduce the output over the all points, leading to a tensor of shape (N,M).
 
     parameters
     ----------------
     pts : torch.Tensor, shape (N, D)
         The points to transform.
-    tmat : torch.Tensor, shape (M, C, D)
+    tmat : torch.Tensor, shape (M, D, C)
         The transformation matrices to apply to the points.
     reduce_method : str, 'squared_sum' | 'sum' | 'l2_norm'
         The method to reduce the output over the all points.
@@ -112,17 +120,17 @@ def transform_points_linear_all_to_all_with_reduce(
     """
     if reduce_method == "squared_sum":
         # Compute transformation and squared sum reduction in one step
-        # First compute the transformed points: mcd,nd->nmc
-        # Then square and sum along c dimension: nmc->nm
-        transformed_and_reduced = torch.einsum("mij,nj,mik,nk->nm", tmat, pts, tmat, pts)
+        # First compute the transformed points: mdj,ni->nmj
+        # Then square and sum along j dimension: nmj->nm
+        transformed_and_reduced = torch.einsum("ni,mij,nk,mkj->nm", pts, tmat, pts, tmat)
     elif reduce_method == "sum":
         # Compute transformation and sum reduction in one step
-        # mcd,nd->nm directly sums over the c dimension
-        transformed_and_reduced = torch.einsum("mcd,nd->nm", tmat, pts)
+        # nd,mdc->nm directly sums over the c dimension
+        transformed_and_reduced = torch.einsum("nd,mdc->nm", pts, tmat)
     elif reduce_method == "l2_norm":
         # Compute transformation and l2 norm reduction in one step
-        # mcd,nd->nm directly sums over the c dimension
-        sum_of_squares = torch.einsum("mij,nj,mik,nk->nm", tmat, pts, tmat, pts)
+        # nd,mdc->nm directly sums over the c dimension
+        sum_of_squares = torch.einsum("ni,mij,nk,mkj->nm", pts, tmat, pts, tmat)
         transformed_and_reduced = torch.sqrt(sum_of_squares)
     else:
         raise ValueError(f"Invalid reduce_method: {reduce_method}")
@@ -140,14 +148,14 @@ def transform_points_linear_all_to_all(
     This function is designed for the case where you have N points to be transformed by M different linear transformations,
     along with M bias vectors. Each point will be transformed by each of the M transformations, leading to M points.
 
-    Specifically, for point[k] in (N,D), and transformation[m] in (M,C,D), and bias[m] in (M,C),
-    the output will be a tensor of shape (N,M,C), where output[i,j] = transformation[j] @ point[i] + bias[j].
+    Specifically, for point[k] in (N,D), and transformation[m] in (M,D,C), and bias[m] in (M,C),
+    the output will be a tensor of shape (N,M,C), where output[i,j] = point[i] @ transformation[j] + bias[j].
 
     parameters
     ----------------
     pts : torch.Tensor, shape (N, D)
         The points to transform.
-    tmat : torch.Tensor, shape (M, C, D)
+    tmat : torch.Tensor, shape (M, D, C)
         The transformation matrices to apply to the points.
     bias : torch.Tensor, shape (M, C), or (C,) with auto broadcasting, or None
         The bias vectors to add to the points.
@@ -158,8 +166,8 @@ def transform_points_linear_all_to_all(
         The transformed points.
     """
     # Use einsum for efficient matrix multiplication across all points and transformations
-    # 'mcd,nd->nmc': m transformations, c output dimension, d input dimension, n points
-    transformed_pts = torch.einsum("mcd,nd->nmc", tmat, pts)
+    # 'mdc,nd->nmc': m transformations, d input dimension, c output dimension, n points
+    transformed_pts = torch.einsum("nd,mdc->nmc", pts, tmat)
 
     # Add bias if provided
     if bias is not None:
@@ -181,9 +189,13 @@ def create_rigid_transform_4x4(
     translations: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
-    Create a 4x4 rigid transformation matrices from batched rotation quaternions
+    Create 4x4 rigid transformation matrices from batched rotation quaternions
     and translation vectors. The created matrices are on the device as the input
     tensors.
+
+    IMPORTANT: The returned matrices are designed for right multiplication with points,
+    i.e., point @ transformation (where point is a row vector). This is consistent
+    with the convention used in transform_points_linear_all_to_all.
 
     parameters
     ----------------
@@ -197,7 +209,8 @@ def create_rigid_transform_4x4(
     return
     ---------------
     transform_mats : torch.Tensor
-        Rigid transformation matrices of shape (N, 4, 4)
+        Rigid transformation matrices of shape (N, 4, 4) for right multiplication
+        with points (point @ transform_mats).
     """
     # Handle None inputs
     device = None
@@ -230,14 +243,15 @@ def create_rigid_transform_4x4(
 
     # Set rotation part if provided
     if quaternions is not None:
+        # For right multiplication (point @ transform), we use the rotation matrix directly
         transform_mats[:, :3, :3] = rotation_matrices
 
     # Set translation part if provided
     if translations is not None:
-        # Handle broadcasting if needed
+        # For right multiplication (point @ transform), translation goes in the last row
         if translations.dim() == 1:  # (3,) shape
-            transform_mats[:, :3, 3] = translations.unsqueeze(0)
+            transform_mats[:, 3, :3] = translations.unsqueeze(0)
         else:  # (N, 3) shape
-            transform_mats[:, :3, 3] = translations
+            transform_mats[:, 3, :3] = translations
 
     return transform_mats

@@ -2,29 +2,20 @@
 # from torchrbf package, see https://github.com/ArmanMaesumi/torchrbf
 
 import torch
-from typing import Callable
+from typing import Callable, Dict, Union
 from enum import Enum
 
-eps = 1e-7
+eps: float = 1e-7
 
 
-def linear(r):
+def identity(r: torch.Tensor) -> torch.Tensor:
     """
-    Linear radial basis function.
-
-    parameters
-    ----------------
-    r : torch.Tensor
-        Input tensor representing radial distances.
-
-    return
-    ---------------
-    torch.Tensor: Negative of the input tensor.
+    Identity radial basis function.
     """
-    return -r
+    return r
 
 
-def thin_plate_spline(r):
+def thin_plate_spline(r: torch.Tensor) -> torch.Tensor:
     """
     Thin plate spline radial basis function.
 
@@ -41,7 +32,7 @@ def thin_plate_spline(r):
     return r**2 * torch.log(r)
 
 
-def cubic(r):
+def cubic(r: torch.Tensor) -> torch.Tensor:
     """
     Cubic radial basis function.
 
@@ -57,7 +48,7 @@ def cubic(r):
     return r**3
 
 
-def quintic(r):
+def quintic(r: torch.Tensor) -> torch.Tensor:
     """
     Quintic radial basis function.
 
@@ -73,7 +64,7 @@ def quintic(r):
     return -(r**5)
 
 
-def multiquadric(r):
+def multiquadric(r: torch.Tensor) -> torch.Tensor:
     """
     Multiquadric radial basis function.
 
@@ -89,7 +80,7 @@ def multiquadric(r):
     return -torch.sqrt(r**2 + 1)
 
 
-def inverse_multiquadric(r):
+def inverse_multiquadric(r: torch.Tensor) -> torch.Tensor:
     """
     Inverse multiquadric radial basis function.
 
@@ -105,7 +96,7 @@ def inverse_multiquadric(r):
     return 1 / torch.sqrt(r**2 + 1)
 
 
-def inverse_quadratic(r):
+def inverse_quadratic(r: torch.Tensor) -> torch.Tensor:
     """
     Inverse quadratic radial basis function.
 
@@ -121,7 +112,7 @@ def inverse_quadratic(r):
     return 1 / (r**2 + 1)
 
 
-def gaussian(r):
+def gaussian(r: torch.Tensor) -> torch.Tensor:
     """
     Gaussian radial basis function.
 
@@ -138,7 +129,6 @@ def gaussian(r):
 
 
 class RadialBasisFunction(Enum):
-    LINEAR = "linear"
     THIN_PLATE_SPLINE = "thin_plate_spline"
     CUBIC = "cubic"
     QUINTIC = "quintic"
@@ -146,10 +136,11 @@ class RadialBasisFunction(Enum):
     INVERSE_MULTIQUADRIC = "inverse_multiquadric"
     INVERSE_QUADRATIC = "inverse_quadratic"
     GAUSSIAN = "gaussian"
+    IDENTITY = "identity"
 
 
-RADIAL_FUNCS = {
-    RadialBasisFunction.LINEAR.value: linear,
+RADIAL_FUNCS: Dict[str, Callable[[torch.Tensor], torch.Tensor]] = {
+    RadialBasisFunction.IDENTITY.value: identity,
     RadialBasisFunction.THIN_PLATE_SPLINE.value: thin_plate_spline,
     RadialBasisFunction.CUBIC.value: cubic,
     RadialBasisFunction.QUINTIC.value: quintic,
@@ -160,13 +151,13 @@ RADIAL_FUNCS = {
 }
 
 
-def get_radial_function(rbf_type: str) -> Callable[[torch.Tensor], torch.Tensor]:
+def get_radial_function(rbf_type: str | RadialBasisFunction) -> Callable[[torch.Tensor], torch.Tensor]:
     """
     Get the radial basis function based on the type.
 
     parameters
     ----------------
-    rbf_type : str
+    rbf_type : str | RadialBasisFunction
         The type of radial basis function to get.
 
     returns
@@ -174,4 +165,7 @@ def get_radial_function(rbf_type: str) -> Callable[[torch.Tensor], torch.Tensor]
     rbf_fn : Callable[[torch.Tensor], torch.Tensor]
         The radial basis function.
     """
-    return RADIAL_FUNCS[rbf_type]
+    if isinstance(rbf_type, str):
+        return RADIAL_FUNCS[rbf_type]
+    else:
+        return RADIAL_FUNCS[rbf_type.value]
