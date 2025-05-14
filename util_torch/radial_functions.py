@@ -1,171 +1,225 @@
 # radial basis functions
-# from torchrbf package, see https://github.com/ArmanMaesumi/torchrbf
+# for definitions, see https://rbf.readthedocs.io/en/latest/basis.html#rbf.basis.RBF
+# note that, to scale the radial distance, we use the radial_scale parameter,
+# and we ALWAYS apply it like as r = r * radial_scale,
+# this DIFFERS from the above article, where the eps is applied sometimes as r = eps * r
+# and sometimes as r = r / eps
 
 import torch
+import torch.nn as nn
 from typing import Callable, Dict, Union
-from enum import Enum
 
-eps: float = 1e-7
-
-
-def identity(r: torch.Tensor) -> torch.Tensor:
-    """
-    Identity radial basis function.
-    """
-    return r
+# from enum import Enum
 
 
-def thin_plate_spline(r: torch.Tensor) -> torch.Tensor:
-    """
-    Thin plate spline radial basis function.
-
-    parameters
-    ----------------
-    r : torch.Tensor
-        Input tensor representing radial distances.
-
-    return
-    ---------------
-    torch.Tensor: r^2 * log(r) with r clamped to a minimum value to avoid log(0).
-    """
-    r = torch.clamp(r, min=eps)
-    return r**2 * torch.log(r)
-
-
-def cubic(r: torch.Tensor) -> torch.Tensor:
-    """
-    Cubic radial basis function.
-
-    parameters
-    ----------------
-    r : torch.Tensor
-        Input tensor representing radial distances.
-
-    return
-    ---------------
-    torch.Tensor: r^3
-    """
-    return r**3
-
-
-def quintic(r: torch.Tensor) -> torch.Tensor:
-    """
-    Quintic radial basis function.
-
-    parameters
-    ----------------
-    r : torch.Tensor
-        Input tensor representing radial distances.
-
-    return
-    ---------------
-    torch.Tensor: -r^5
-    """
-    return -(r**5)
-
-
-def multiquadric(r: torch.Tensor) -> torch.Tensor:
-    """
-    Multiquadric radial basis function.
-
-    parameters
-    ----------------
-    r : torch.Tensor
-        Input tensor representing radial distances.
-
-    returns
-    ---------------
-    torch.Tensor: -sqrt(r^2 + 1)
-    """
-    return -torch.sqrt(r**2 + 1)
-
-
-def inverse_multiquadric(r: torch.Tensor) -> torch.Tensor:
-    """
-    Inverse multiquadric radial basis function.
-
-    parameters
-    ----------------
-    r : torch.Tensor
-        Input tensor representing radial distances.
-
-    returns
-    ---------------
-    torch.Tensor: 1/sqrt(r^2 + 1)
-    """
-    return 1 / torch.sqrt(r**2 + 1)
-
-
-def inverse_quadratic(r: torch.Tensor) -> torch.Tensor:
-    """
-    Inverse quadratic radial basis function.
-
-    parameters
-    ----------------
-    r : torch.Tensor
-        Input tensor representing radial distances.
-
-    returns
-    ---------------
-    torch.Tensor: 1/(r^2 + 1)
-    """
-    return 1 / (r**2 + 1)
-
-
-def gaussian(r: torch.Tensor) -> torch.Tensor:
-    """
-    Gaussian radial basis function.
-
-    parameters
-    ----------------
-    r : torch.Tensor
-        Input tensor representing radial distances.
-
-    returns
-    ---------------
-    torch.Tensor: exp(-r^2)
-    """
-    return torch.exp(-(r**2))
-
-
-class RadialBasisFunction(Enum):
+class RBFType:
     THIN_PLATE_SPLINE = "thin_plate_spline"
-    CUBIC = "cubic"
-    QUINTIC = "quintic"
     MULTIQUADRIC = "multiquadric"
     INVERSE_MULTIQUADRIC = "inverse_multiquadric"
     INVERSE_QUADRATIC = "inverse_quadratic"
     GAUSSIAN = "gaussian"
     IDENTITY = "identity"
+    EXPONENTIAL = "exponential"
 
 
-RADIAL_FUNCS: Dict[str, Callable[[torch.Tensor], torch.Tensor]] = {
-    RadialBasisFunction.IDENTITY.value: identity,
-    RadialBasisFunction.THIN_PLATE_SPLINE.value: thin_plate_spline,
-    RadialBasisFunction.CUBIC.value: cubic,
-    RadialBasisFunction.QUINTIC.value: quintic,
-    RadialBasisFunction.MULTIQUADRIC.value: multiquadric,
-    RadialBasisFunction.INVERSE_MULTIQUADRIC.value: inverse_multiquadric,
-    RadialBasisFunction.INVERSE_QUADRATIC.value: inverse_quadratic,
-    RadialBasisFunction.GAUSSIAN.value: gaussian,
-}
-
-
-def get_radial_function(rbf_type: str | RadialBasisFunction) -> Callable[[torch.Tensor], torch.Tensor]:
+class RBFBase(nn.Module):
     """
-    Get the radial basis function based on the type.
-
-    parameters
-    ----------------
-    rbf_type : str | RadialBasisFunction
-        The type of radial basis function to get.
-
-    returns
-    ---------------
-    rbf_fn : Callable[[torch.Tensor], torch.Tensor]
-        The radial basis function.
+    Base class for radial basis functions (RBFs).
     """
-    if isinstance(rbf_type, str):
-        return RADIAL_FUNCS[rbf_type]
-    else:
-        return RADIAL_FUNCS[rbf_type.value]
+
+    def __init__(self, rbf_type: str):
+        super().__init__()
+        self._rbf_type = rbf_type
+        self.register_buffer("rbf_type", torch.tensor([ord(c) for c in rbf_type], dtype=torch.int32))
+
+    def forward(self, r: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for the radial basis function.
+
+        parameters
+        ----------------
+        r : torch.Tensor
+            Input tensor representing radial distances.
+
+        return
+        ---------------
+        torch.Tensor: Output of the radial basis function.
+        """
+        raise NotImplementedError("Subclasses should implement this method.")
+
+
+class RBF_Identity(RBFBase):
+    """
+    Identity radial basis function, just return the input.
+    """
+
+    def __init__(self):
+        super().__init__(RBFType.IDENTITY)
+
+    def forward(self, r: torch.Tensor) -> torch.Tensor:
+        return r
+
+
+class RBF_ThinPlateSpline(RBFBase):
+    """
+    Thin plate spline radial basis function.
+    It is also named 2nd-order polyharmonic spline, see https://rbf.readthedocs.io/en/latest/basis.html
+    """
+
+    def __init__(self, radial_scale: float = 1.0, eps_guard: float = 1e-6):
+        """
+        Initialize the thin plate spline radial basis function.
+        Range is (0, inf).
+
+        parameters
+        ----------------
+        radial_scale : float
+            Scale factor for the radial distance.
+        eps_guard : float
+            Small value to avoid log(0).
+        """
+        super().__init__(RBFType.THIN_PLATE_SPLINE)
+        assert eps_guard > 0, "eps_guard must be positive"
+        self.register_buffer("eps_guard", torch.tensor(eps_guard, dtype=torch.float32))
+        self.register_buffer("radial_scale", torch.tensor(radial_scale, dtype=torch.float32))
+
+    def forward(self, r: torch.Tensor) -> torch.Tensor:
+        r = torch.clamp(r * self.radial_scale, min=self.eps_guard)
+        return r**2 * torch.log(r)
+
+
+class RBF_Multiquadric(RBFBase):
+    """
+    Multiquadric radial basis function.
+    It is always negative, range is (-inf, 0).
+
+    Definition:
+    s=scale, r=radial distance
+    phi(r) = -sqrt((r*s)^2 + 1)
+    """
+
+    def __init__(self, radial_scale: float = 1.0):
+        super().__init__(RBFType.MULTIQUADRIC)
+        self.register_buffer("radial_scale", torch.tensor(radial_scale, dtype=torch.float32))
+
+    def forward(self, r: torch.Tensor) -> torch.Tensor:
+        scale = self.radial_scale
+        r = r * scale
+        output = -torch.sqrt(r**2 + 1)
+        return output
+
+
+class RBF_InverseMultiquadric(RBFBase):
+    """
+    Inverse multiquadric radial basis function.
+    It is always positive, range is (0, 1).
+
+    Definition:
+    s=scale, r=radial distance
+    phi(r) = 1/sqrt((r*s)^2 + 1)
+    """
+
+    def __init__(self, radial_scale: float = 1.0):
+        super().__init__(RBFType.INVERSE_MULTIQUADRIC)
+        self.register_buffer("radial_scale", torch.tensor(radial_scale, dtype=torch.float32))
+
+    def forward(self, r: torch.Tensor) -> torch.Tensor:
+        scale = self.radial_scale
+        r = r * scale
+        output = 1 / torch.sqrt(r**2 + 1)
+        return output
+
+
+class RBF_InverseQuadratic(RBFBase):
+    """Inverse quadratic radial basis function.
+    It is always positive, range is (0, 1).
+
+    Definition:
+    s=scale, r=radial distance
+    phi(r) = 1/((r*s)^2 + 1)
+    """
+
+    def __init__(self, radial_scale: float = 1.0):
+        super().__init__(RBFType.INVERSE_QUADRATIC)
+        self.register_buffer("radial_scale", torch.tensor(radial_scale, dtype=torch.float32))
+
+    def forward(self, r: torch.Tensor) -> torch.Tensor:
+        scale = self.radial_scale
+        r = r * scale
+        output = 1 / (r**2 + 1)
+        return output
+
+
+class RBF_Gaussian(RBFBase):
+    """Gaussian radial basis function.
+    It is always positive, range is (0, 1).
+
+    Definition:
+    s=scale, r=radial distance
+    phi(r) = exp(-((r*s)^2))
+    """
+
+    def __init__(self, radial_scale: float = 1.0):
+        super().__init__(RBFType.GAUSSIAN)
+        self.register_buffer("radial_scale", torch.tensor(radial_scale, dtype=torch.float32))
+
+    def forward(self, r: torch.Tensor) -> torch.Tensor:
+        scale = self.radial_scale
+        r = r * scale
+        output = torch.exp(-(r**2))
+        return output
+
+
+class RBF_Exponential(RBFBase):
+    """Exponential radial basis function.
+    It is always positive, range is (0, 1).
+
+    Definition:
+    s=scale, r=radial distance
+    phi(r) = exp(-r*s)
+    """
+
+    def __init__(self, radial_scale: float = 1.0):
+        super().__init__(RBFType.EXPONENTIAL)
+        self.register_buffer("radial_scale", torch.tensor(radial_scale, dtype=torch.float32))
+
+    def forward(self, r: torch.Tensor) -> torch.Tensor:
+        scale = self.radial_scale
+        r = r * scale
+        output = torch.exp(-(r * scale))
+        return output
+
+
+class RBFFactory:
+    @classmethod
+    def create_rbf(cls, rbf_type: str, radial_scale: float = 1.0) -> RBFBase:
+        """
+        Factory method to create a radial basis function instance.
+
+        parameters
+        ----------------
+        rbf_type : RBFType
+            Type of the radial basis function.
+        radial_scale : float
+            Scale factor for the radial distance.
+
+        return
+        ---------------
+        RBFBase: Instance of the specified radial basis function.
+        """
+        if rbf_type == RBFType.THIN_PLATE_SPLINE:
+            return RBF_ThinPlateSpline(radial_scale=radial_scale)
+        elif rbf_type == RBFType.MULTIQUADRIC:
+            return RBF_Multiquadric(radial_scale=radial_scale)
+        elif rbf_type == RBFType.INVERSE_MULTIQUADRIC:
+            return RBF_InverseMultiquadric(radial_scale=radial_scale)
+        elif rbf_type == RBFType.INVERSE_QUADRATIC:
+            return RBF_InverseQuadratic(radial_scale=radial_scale)
+        elif rbf_type == RBFType.GAUSSIAN:
+            return RBF_Gaussian(radial_scale=radial_scale)
+        elif rbf_type == RBFType.EXPONENTIAL:
+            return RBF_Exponential(radial_scale=radial_scale)
+        elif rbf_type == RBFType.IDENTITY:
+            return RBF_Identity()
+        else:
+            raise ValueError(f"Unknown radial basis function type: {rbf_type}")
