@@ -14,6 +14,7 @@ class ScalarFieldByRBF(nn.Module):
         n_ambient_components: int,
         rbf_type: str = RBFType.GAUSSIAN,
         ambient_type: str = RBFType.IDENTITY,
+        enforce_similarity_transformation: bool = False,
     ):
         super().__init__()
 
@@ -31,19 +32,45 @@ class ScalarFieldByRBF(nn.Module):
 
         # create parameters
         if n_rbf_components > 0:
-            self.rbf_extrinsic_affine = nn.Parameter(torch.randn(n_rbf_components, point_dim, point_dim))
             self.rbf_extrinsic_translation = nn.Parameter(torch.randn(n_rbf_components, point_dim))
+            if enforce_similarity_transformation:
+                # only applicable in 3d
+                assert point_dim == 3, "Similarity transformation is only supported in 3D"
+
+                # when we use simliarity transformation, the affine matrix is defined by rotation and scale
+                self.rbf_extrinsic_quaternions = nn.Parameter(torch.randn(n_rbf_components, 4))
+                self.rbf_extrinsic_scales = nn.Parameter(torch.randn(n_rbf_components, 3))
+                self.rbf_extrinsic_affine = None
+            else:
+                # if we don't want to enforce similarity transformation, we can use any matrix
+                # so we just use a random matrix
+                self.rbf_extrinsic_affine = nn.Parameter(torch.randn(n_rbf_components, point_dim, point_dim))
 
             # scale for the rbf, used to scale the output of the rbf
             self.rbf_post_scale = nn.Parameter(torch.randn(n_rbf_components))
+
+            # scale for the radial distance, used to scale the input of the rbf
+            self.rbf_radial_scale = nn.Parameter(torch.randn(n_rbf_components))
         else:
             self.rbf_extrinsic_affine: nn.Parameter = None
             self.rbf_extrinsic_translation: nn.Parameter = None
             self.rbf_post_scale: nn.Parameter = None
 
         if n_ambient_components > 0:
-            self.ambient_extrinsic_affine = nn.Parameter(torch.randn(n_ambient_components, point_dim, point_dim))
             self.ambient_extrinsic_translation = nn.Parameter(torch.randn(n_ambient_components, point_dim))
+            if enforce_similarity_transformation:
+                # only applicable in 3d
+                assert point_dim == 3, "Similarity transformation is only supported in 3D"
+
+                # when we use simliarity transformation, the affine matrix is defined by rotation and scale
+                self.ambient_extrinsic_quaternions = nn.Parameter(torch.randn(n_ambient_components, 4))
+                self.ambient_extrinsic_scales = nn.Parameter(torch.randn(n_ambient_components, 3))
+                self.ambient_extrinsic_affine = None
+            else:
+                # if we don't want to enforce similarity transformation, we can use any matrix
+                # so we just use a random matrix
+                self.ambient_extrinsic_affine = nn.Parameter(torch.randn(n_ambient_components, point_dim, point_dim))
+
             # scale for the ambient, used to scale the output of the ambient
             self.ambient_post_scale = nn.Parameter(torch.randn(n_ambient_components))
         else:
@@ -83,6 +110,46 @@ class ScalarFieldByRBF(nn.Module):
         ambient_type_decoded = "".join([chr(c.item()) for c in ambient_type_encoded])
         return ambient_type_decoded
 
+    def _get_rbf_extrinsic_affine(self) -> torch.Tensor:
+        """
+        Get the rbf extrinsic affine matrix.
+
+        returns
+        -----------------
+        rbf_extrinsic_affine : torch.Tensor, shape (N, D, D)
+            The rbf extrinsic affine matrix
+        """
+        if self.rbf_extrinsic_affine is not None:
+            return self.rbf_extrinsic_affine
+        else:
+            # construct it from quaternion and scales
+            assert hasattr(self, "rbf_extrinsic_quaternions"), "rbf_extrinsic_quaternions is not set"
+            assert hasattr(self, "rbf_extrinsic_scales"), "rbf_extrinsic_scales is not set"
+            rbf_extrinsic_affine = igt_geom.create_similarity_transform_4x4(
+                quaternions=self.rbf_extrinsic_quaternions, scales=self.rbf_extrinsic_scales
+            )[:, :3, :3]
+            return rbf_extrinsic_affine
+
+    def _get_ambient_extrinsic_affine(self) -> torch.Tensor:
+        """
+        Get the ambient extrinsic affine matrix.
+
+        returns
+        -----------------
+        ambient_extrinsic_affine : torch.Tensor, shape (N, D, D)
+            The ambient extrinsic affine matrix
+        """
+        if self.ambient_extrinsic_affine is not None:
+            return self.ambient_extrinsic_affine
+        else:
+            # construct it from quaternion and scales
+            assert hasattr(self, "ambient_extrinsic_quaternions"), "ambient_extrinsic_quaternions is not set"
+            assert hasattr(self, "ambient_extrinsic_scales"), "ambient_extrinsic_scales is not set"
+            ambient_extrinsic_affine = igt_geom.create_similarity_transform_4x4(
+                quaternions=self.ambient_extrinsic_quaternions, scales=self.ambient_extrinsic_scales
+            )[:, :3, :3]
+            return ambient_extrinsic_affine
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """evaluate the scalar field at the points x. For each point, it is first transformed by the rbf_extrinsic_affine and rbf_extrinsic_translation,
         and gets the rbf value. Then, the ambient field is evaluated similarly, and the two are summed up.
@@ -99,15 +166,15 @@ class ScalarFieldByRBF(nn.Module):
         """
         output: torch.Tensor = torch.zeros(x.shape[0], device=x.device, dtype=x.dtype)
 
-        if self.rbf_extrinsic_affine is not None:
+        if self.n_rbf_components > 0:
             sdf_by_rbf = self.evaluate_rbf(x)  # (N, M)
             # sum over the rbf components
-            output += torch.sum(sdf_by_rbf, dim=-1)  # (N, M) -> (N,)
+            output += torch.mean(sdf_by_rbf, dim=-1)  # (N, M) -> (N,)
 
-        if self.ambient_extrinsic_affine is not None:
+        if self.n_ambient_components > 0:
             sdf_by_ambient = self.evaluate_ambient(x)
             # sum over the ambient components
-            output += torch.sum(sdf_by_ambient, dim=-1)
+            output += torch.mean(sdf_by_ambient, dim=-1)
 
         return output
 
@@ -133,6 +200,16 @@ class ScalarFieldByRBF(nn.Module):
 
             # Set scale to 1
             self.rbf_post_scale.data.fill_(1.0)
+        else:
+            # If rbf_extrinsic_affine is None, set the quaternion and scale to identity
+            batch_size_rbf = self.rbf_extrinsic_quaternions.shape[0]
+            identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.rbf_extrinsic_quaternions.device).expand(
+                batch_size_rbf, -1
+            )
+            self.rbf_extrinsic_quaternions.data.copy_(identity_quat)
+            self.rbf_extrinsic_scales.data.fill_(1.0)
+            self.rbf_extrinsic_translation.data.zero_()
+            self.rbf_post_scale.data.fill_(1.0)
 
         if self.ambient_extrinsic_affine is not None:
             batch_size_ambient = self.ambient_extrinsic_affine.shape[0]
@@ -145,33 +222,16 @@ class ScalarFieldByRBF(nn.Module):
             self.ambient_extrinsic_affine.data.copy_(identity_ambient)
             self.ambient_extrinsic_translation.data.zero_()
             self.ambient_post_scale.data.fill_(1.0)
-
-    def set_extrinsics_to_random(self):
-        """
-        Set the extrinsic affine matrices to random matrices, and the translations to random vectors.
-        """
-
-        # handle the rbf
-        if self.rbf_extrinsic_affine is not None:
-            self.rbf_extrinsic_affine.data.copy_(
-                torch.randn(self.rbf_extrinsic_affine.shape, device=self.rbf_extrinsic_affine.device)
+        else:
+            # If ambient_extrinsic_affine is None, set the quaternion and scale to identity
+            batch_size_ambient = self.ambient_extrinsic_quaternions.shape[0]
+            identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.ambient_extrinsic_quaternions.device).expand(
+                batch_size_ambient, -1
             )
-            self.rbf_extrinsic_translation.data.copy_(
-                torch.randn(self.rbf_extrinsic_translation.shape, device=self.rbf_extrinsic_translation.device)
-            )
-            self.rbf_post_scale.data.copy_(torch.randn(self.rbf_post_scale.shape, device=self.rbf_post_scale.device))
-
-        # handle the ambient
-        if self.ambient_extrinsic_affine is not None:
-            self.ambient_extrinsic_affine.data.copy_(
-                torch.randn(self.ambient_extrinsic_affine.shape, device=self.ambient_extrinsic_affine.device)
-            )
-            self.ambient_post_scale.data.copy_(
-                torch.randn(self.ambient_post_scale.shape, device=self.ambient_post_scale.device)
-            )
-            self.ambient_extrinsic_translation.data.copy_(
-                torch.randn(self.ambient_extrinsic_translation.shape, device=self.ambient_extrinsic_translation.device)
-            )
+            self.ambient_extrinsic_quaternions.data.copy_(identity_quat)
+            self.ambient_extrinsic_scales.data.fill_(1.0)
+            self.ambient_extrinsic_translation.data.zero_()
+            self.ambient_post_scale.data.fill_(1.0)
 
     def evaluate_rbf(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -197,17 +257,18 @@ class ScalarFieldByRBF(nn.Module):
         rbf_values : torch.Tensor, shape (N,M)
             The rbf values at the points, for each of N points and each of M rbf components
         """
-        assert self.rbf_extrinsic_affine is not None, "rbf_extrinsic_affine is not set"
-        assert self.rbf_extrinsic_translation is not None, "rbf_extrinsic_translation is not set"
         assert x.shape[-1] == self.point_dim, f"point_dim is {self.point_dim}, but x.shape[-1] is {x.shape[-1]}"
 
         # transform all the points, x_transformed = x@E + d, shape is (N,M,D)
-        x_transformed = igt_geom.transform_points_linear_all_to_all(
-            x, self.rbf_extrinsic_affine, self.rbf_extrinsic_translation
-        )
+        affine_transform = self._get_rbf_extrinsic_affine()
+        x_transformed = igt_geom.transform_points_linear_all_to_all(x, affine_transform, self.rbf_extrinsic_translation)
 
         # compute the squared distance, result is (N,M)
         radial_value = torch.norm(x_transformed, dim=-1, p=2)
+
+        # scale the radial distance
+        if self.rbf_radial_scale is not None:
+            radial_value = radial_value * self.rbf_radial_scale.view(1, -1)
 
         # evaluate the rbf function
         func = rbfuncs.RBFFactory.create_rbf(self.rbf_type)
@@ -245,13 +306,12 @@ class ScalarFieldByRBF(nn.Module):
             The ambient field values at the points, for each of N points and each of A ambient components
         """
 
-        assert self.ambient_extrinsic_affine is not None, "ambient_extrinsic_affine is not set"
-        assert self.ambient_extrinsic_translation is not None, "ambient_extrinsic_translation is not set"
         assert x.shape[-1] == self.point_dim, f"point_dim is {self.point_dim}, but x.shape[-1] is {x.shape[-1]}"
 
         # transform all the points, x_transformed = x@E + d, shape is (N,D)
+        affine_transform = self._get_ambient_extrinsic_affine()
         x_transformed = igt_geom.transform_points_linear_all_to_all(
-            x, self.ambient_extrinsic_affine, self.ambient_extrinsic_translation
+            x, affine_transform, self.ambient_extrinsic_translation
         )
 
         # compute the radial distance

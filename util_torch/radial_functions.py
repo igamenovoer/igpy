@@ -84,7 +84,7 @@ class RBF_ThinPlateSpline(RBFBase):
         self.register_buffer("radial_scale", torch.tensor(radial_scale, dtype=torch.float32))
 
     def forward(self, r: torch.Tensor) -> torch.Tensor:
-        r = torch.clamp(r * self.radial_scale, min=self.eps_guard)
+        r = torch.clamp(r * self.radial_scale.item(), min=self.eps_guard.item())
         return r**2 * torch.log(r)
 
 

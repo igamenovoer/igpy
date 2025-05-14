@@ -184,18 +184,23 @@ def transform_points_linear_all_to_all(
     return transformed_pts
 
 
-def create_rigid_transform_4x4(
+def create_similarity_transform_4x4(
     quaternions: torch.Tensor | None = None,
     translations: torch.Tensor | None = None,
+    scales: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
-    Create 4x4 rigid transformation matrices from batched rotation quaternions
-    and translation vectors. The created matrices are on the device as the input
-    tensors.
+    Create 4x4 similarity transformation matrices from batched rotation quaternions, translation vectors and scales.
+    The created matrices are on the device as the input tensors.
 
     IMPORTANT: The returned matrices are designed for right multiplication with points,
     i.e., point @ transformation (where point is a row vector). This is consistent
     with the convention used in transform_points_linear_all_to_all.
+
+    The transformation is applied in the order of scaling, rotation, and translation.
+    The transformation matrix is constructed as follows:
+    new_point = point @ R @ S + translation
+    where R is the rotation matrix, S is the axis-aligned scaling matrix, and translation is the translation vector.
 
     parameters
     ----------------
@@ -205,6 +210,10 @@ def create_rigid_transform_4x4(
     translations : torch.Tensor
         Translation vectors of shape (N, 3), or (3,) with auto broadcasting,
         or None. If None, the translation vector is the zero vector.
+    scales : torch.Tensor
+        Scale factors of shape (N, 3), or (3,) with auto broadcasting,
+        or None. If None, the scale is the identity matrix.
+        Scaling is applied before rotation and translation.
 
     return
     ---------------
@@ -245,6 +254,20 @@ def create_rigid_transform_4x4(
     if quaternions is not None:
         # For right multiplication (point @ transform), we use the rotation matrix directly
         transform_mats[:, :3, :3] = rotation_matrices
+
+    # Set scale part if provided
+    if scales is not None:
+        # Create a diagonal scaling matrix
+        if scales.dim() == 1:  # (3,) shape
+            scale_matrix = torch.diag(scales).unsqueeze(0)
+            scale_matrix = scale_matrix.repeat(batch_size, 1, 1)
+        else:  # (N, 3) shape
+            scale_matrix = torch.zeros((batch_size, 3, 3), device=device, dtype=dtype)
+            for i in range(batch_size):
+                scale_matrix[i] = torch.diag(scales[i])
+
+        # Apply scaling to the rotation part of the transformation matrix
+        transform_mats[:, :3, :3] = torch.matmul(rotation_matrices, scale_matrix)
 
     # Set translation part if provided
     if translations is not None:
