@@ -7,6 +7,31 @@ import igpy.util_torch.geometry as igt_geom
 
 
 class ScalarFieldByRBF(nn.Module):
+    """A scalar field defined by a sum of Radial Basis Functions (RBFs) and an optional ambient field.
+    This module implements a scalar field model using a combination of radial basis functions (RBFs)
+    and an optional ambient field. The scalar field is defined as a sum of RBF components, each
+    centered at a different location in space, plus an optional ambient field that provides a
+    global scalar value. The RBFs and ambient field can be transformed by extrinsic affine
+    transformations (rotation, scale, and translation) to allow for flexible shaping of the scalar field.
+    The class supports different types of RBFs, specified by the `rbf_type` parameter, and an
+    optional ambient field, specified by the `ambient_type` parameter. The extrinsic transformations
+    can be either full affine transformations or similarity transformations (rotation, uniform scale, and translation).
+    Attributes:
+        EpsScaleInitialRange (Tuple[float, float]): Default range for initializing the epsilon scale parameter.
+    Args:
+        point_dim (int): Dimensionality of the input points (e.g., 3 for 3D points).
+        n_rbf_components (int): Number of RBF components in the scalar field.
+        n_ambient_components (int): Number of ambient components in the scalar field.
+        rbf_type (str): Type of RBF to use (e.g., 'gaussian', 'thin_plate_spline').
+        ambient_type (str): Type of ambient field to use (e.g., 'identity', 'constant').
+        enforce_similarity_transformation (bool): Whether to enforce a similarity transformation
+            (rotation, uniform scale, and translation) for the extrinsic transformations. If False,
+            a full affine transformation is used.
+    """
+
+    # default settings
+    EpsScaleInitialRange = (1e-2, 100.0)
+
     def __init__(
         self,
         point_dim: int,
@@ -18,19 +43,31 @@ class ScalarFieldByRBF(nn.Module):
     ):
         super().__init__()
 
-        self.register_buffer("n_rbf_components", torch.tensor(n_rbf_components))
-        self.register_buffer("n_ambient_components", torch.tensor(n_ambient_components))
-        self.register_buffer("point_dim", torch.tensor(point_dim))
+        self.register_buffer("_n_rbf_components", torch.tensor(n_rbf_components))
+        self.register_buffer("_n_ambient_components", torch.tensor(n_ambient_components))
+        self.register_buffer("_point_dim", torch.tensor(point_dim))
 
         # ascii encoding of the rbf type
         rbf_type_encoded = torch.tensor([ord(c) for c in rbf_type], dtype=torch.int32)
-        self.register_buffer("rbf_type_encoded", rbf_type_encoded)
+        self.register_buffer("_rbf_type", rbf_type_encoded)
 
         # ascii encoding of the ambient type
         ambient_type_encoded = torch.tensor([ord(c) for c in ambient_type], dtype=torch.int32)
-        self.register_buffer("ambient_type_encoded", ambient_type_encoded)
+        self.register_buffer("_ambient_type", ambient_type_encoded)
 
         # create parameters
+        self.rbf_extrinsic_affine: nn.Parameter = None
+        self.rbf_extrinsic_translation: nn.Parameter = None
+        self.rbf_post_scale: nn.Parameter = None
+
+        # when used, should be raised to power of 2
+        # this make sure the eps scale is positive
+        self.rbf_eps_scale_sqrt: nn.Parameter = None
+
+        # for similarity transformation
+        self.rbf_extrinsic_quaternions: nn.Parameter = None
+        self.rbf_extrinsic_scales: nn.Parameter = None
+
         if n_rbf_components > 0:
             self.rbf_extrinsic_translation = nn.Parameter(torch.randn(n_rbf_components, point_dim))
             if enforce_similarity_transformation:
@@ -40,7 +77,6 @@ class ScalarFieldByRBF(nn.Module):
                 # when we use simliarity transformation, the affine matrix is defined by rotation and scale
                 self.rbf_extrinsic_quaternions = nn.Parameter(torch.randn(n_rbf_components, 4))
                 self.rbf_extrinsic_scales = nn.Parameter(torch.randn(n_rbf_components, 3))
-                self.rbf_extrinsic_affine = None
             else:
                 # if we don't want to enforce similarity transformation, we can use any matrix
                 # so we just use a random matrix
@@ -49,12 +85,17 @@ class ScalarFieldByRBF(nn.Module):
             # scale for the rbf, used to scale the output of the rbf
             self.rbf_post_scale = nn.Parameter(torch.randn(n_rbf_components))
 
-            # scale for the radial distance, used to scale the input of the rbf
-            self.rbf_radial_scale = nn.Parameter(torch.randn(n_rbf_components))
-        else:
-            self.rbf_extrinsic_affine: nn.Parameter = None
-            self.rbf_extrinsic_translation: nn.Parameter = None
-            self.rbf_post_scale: nn.Parameter = None
+            # eps scale for the rbf, should be > 0
+            self.rbf_eps_scale_sqrt = nn.Parameter(torch.randn(n_rbf_components))
+            self.rbf_eps_scale_sqrt.data.uniform_(*self.EpsScaleInitialRange)
+
+        # for ambient field
+        self.ambient_extrinsic_affine: nn.Parameter = None
+        self.ambient_extrinsic_translation: nn.Parameter = None
+        self.ambient_post_scale: nn.Parameter = None
+        self.ambient_eps_scale_sqrt: nn.Parameter = None  # when used, should be raised to power of 2
+        self.ambient_extrinsic_quaternions: nn.Parameter = None
+        self.ambient_extrinsic_scales: nn.Parameter = None
 
         if n_ambient_components > 0:
             self.ambient_extrinsic_translation = nn.Parameter(torch.randn(n_ambient_components, point_dim))
@@ -65,7 +106,6 @@ class ScalarFieldByRBF(nn.Module):
                 # when we use simliarity transformation, the affine matrix is defined by rotation and scale
                 self.ambient_extrinsic_quaternions = nn.Parameter(torch.randn(n_ambient_components, 4))
                 self.ambient_extrinsic_scales = nn.Parameter(torch.randn(n_ambient_components, 3))
-                self.ambient_extrinsic_affine = None
             else:
                 # if we don't want to enforce similarity transformation, we can use any matrix
                 # so we just use a random matrix
@@ -73,10 +113,49 @@ class ScalarFieldByRBF(nn.Module):
 
             # scale for the ambient, used to scale the output of the ambient
             self.ambient_post_scale = nn.Parameter(torch.randn(n_ambient_components))
-        else:
-            self.ambient_extrinsic_affine: nn.Parameter = None
-            self.ambient_extrinsic_translation: nn.Parameter = None
-            self.ambient_post_scale: nn.Parameter = None
+
+            # eps scale for the ambient, should be > 0
+            # this is used to scale the output of the ambient
+            self.ambient_eps_scale_sqrt = nn.Parameter(torch.randn(n_ambient_components))
+            self.ambient_eps_scale_sqrt.data.uniform_(*self.EpsScaleInitialRange)
+
+        # done with initialization
+
+    @property
+    def n_rbf_components(self) -> int:
+        """
+        Get the number of RBF components.
+
+        returns
+        -----------------
+        n_rbf_components : int
+            The number of RBF components
+        """
+        return self._n_rbf_components.item()
+
+    @property
+    def n_ambient_components(self) -> int:
+        """
+        Get the number of ambient components.
+
+        returns
+        -----------------
+        n_ambient_components : int
+            The number of ambient components
+        """
+        return self._n_ambient_components.item()
+
+    @property
+    def point_dim(self) -> int:
+        """
+        Get the dimensionality of the input points.
+
+        returns
+        -----------------
+        point_dim : int
+            The dimensionality of the input points
+        """
+        return self._point_dim.item()
 
     @property
     def rbf_type(self) -> str:
@@ -90,8 +169,7 @@ class ScalarFieldByRBF(nn.Module):
         """
         # this is in the registered buffer, which is a string encoded as ascii with ord
         # so we need to decode it
-        rbf_type_encoded = self.rbf_type_encoded
-        rbf_type_decoded = "".join([chr(c.item()) for c in rbf_type_encoded])
+        rbf_type_decoded = "".join([chr(c.item()) for c in self._rbf_type])
         return rbf_type_decoded
 
     @property
@@ -106,8 +184,7 @@ class ScalarFieldByRBF(nn.Module):
         """
         # this is in the registered buffer, which is a string encoded as ascii with ord
         # so we need to decode it
-        ambient_type_encoded = self.ambient_type_encoded
-        ambient_type_decoded = "".join([chr(c.item()) for c in ambient_type_encoded])
+        ambient_type_decoded = "".join([chr(c.item()) for c in self._ambient_type])
         return ambient_type_decoded
 
     def _get_rbf_extrinsic_affine(self) -> torch.Tensor:
@@ -154,6 +231,8 @@ class ScalarFieldByRBF(nn.Module):
         """evaluate the scalar field at the points x. For each point, it is first transformed by the rbf_extrinsic_affine and rbf_extrinsic_translation,
         and gets the rbf value. Then, the ambient field is evaluated similarly, and the two are summed up.
 
+        For mutiple rbf components, the rbf values are averaged over the components.
+
         parameters
         -----------------
         x : torch.Tensor, shape (N, D)
@@ -178,61 +257,6 @@ class ScalarFieldByRBF(nn.Module):
 
         return output
 
-    def set_extrinsics_to_identity(self):
-        """
-        Set the extrinsic affine matrices to identity matrices, and the translations to zero.
-        """
-        # Set affine matrices to identity
-        if self.rbf_extrinsic_affine is not None:
-            batch_size_rbf = self.rbf_extrinsic_affine.shape[0]
-            dim = self.rbf_extrinsic_affine.shape[1]
-
-            # Create identity matrices for each batch element
-            identity_rbf = (
-                torch.eye(dim, device=self.rbf_extrinsic_affine.device).unsqueeze(0).expand(batch_size_rbf, -1, -1)
-            )
-
-            # Set affine matrices to identity
-            self.rbf_extrinsic_affine.data.copy_(identity_rbf)
-
-            # Set translations to zero
-            self.rbf_extrinsic_translation.data.zero_()
-
-            # Set scale to 1
-            self.rbf_post_scale.data.fill_(1.0)
-        else:
-            # If rbf_extrinsic_affine is None, set the quaternion and scale to identity
-            batch_size_rbf = self.rbf_extrinsic_quaternions.shape[0]
-            identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.rbf_extrinsic_quaternions.device).expand(
-                batch_size_rbf, -1
-            )
-            self.rbf_extrinsic_quaternions.data.copy_(identity_quat)
-            self.rbf_extrinsic_scales.data.fill_(1.0)
-            self.rbf_extrinsic_translation.data.zero_()
-            self.rbf_post_scale.data.fill_(1.0)
-
-        if self.ambient_extrinsic_affine is not None:
-            batch_size_ambient = self.ambient_extrinsic_affine.shape[0]
-            dim = self.ambient_extrinsic_affine.shape[1]
-            identity_ambient = (
-                torch.eye(dim, device=self.ambient_extrinsic_affine.device)
-                .unsqueeze(0)
-                .expand(batch_size_ambient, -1, -1)
-            )
-            self.ambient_extrinsic_affine.data.copy_(identity_ambient)
-            self.ambient_extrinsic_translation.data.zero_()
-            self.ambient_post_scale.data.fill_(1.0)
-        else:
-            # If ambient_extrinsic_affine is None, set the quaternion and scale to identity
-            batch_size_ambient = self.ambient_extrinsic_quaternions.shape[0]
-            identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.ambient_extrinsic_quaternions.device).expand(
-                batch_size_ambient, -1
-            )
-            self.ambient_extrinsic_quaternions.data.copy_(identity_quat)
-            self.ambient_extrinsic_scales.data.fill_(1.0)
-            self.ambient_extrinsic_translation.data.zero_()
-            self.ambient_post_scale.data.fill_(1.0)
-
     def get_rbf_transformed_points(self, x: torch.Tensor) -> torch.Tensor:
         """transform the points x by the rbf_extrinsic_affine and rbf_extrinsic_translation
 
@@ -254,6 +278,29 @@ class ScalarFieldByRBF(nn.Module):
         )
         # transformed_points = x @ affine_transform + self.rbf_extrinsic_translation
         # shape is (N, M, D)
+        return transformed_points
+
+    def get_ambient_transformed_points(self, x: torch.Tensor) -> torch.Tensor:
+        """transform the points x by the ambient_extrinsic_affine and ambient_extrinsic_translation
+
+        parameters
+        -----------------
+        x : torch.Tensor, shape (N, D)
+            The points to transform, for N points in D-dimensional space
+
+        returns
+        -----------------
+        transformed_points : torch.Tensor, shape (N, A, D)
+            The transformed points, for each of N points and each of A ambient components
+        """
+        assert x.shape[-1] == self.point_dim, f"point_dim is {self.point_dim}, but x.shape[-1] is {x.shape[-1]}"
+        # transform
+        affine_transform = self._get_ambient_extrinsic_affine()
+        transformed_points = igt_geom.transform_points_linear_all_to_all(
+            x, affine_transform, self.ambient_extrinsic_translation
+        )
+        # transformed_points = x @ affine_transform + self.ambient_extrinsic_translation
+        # shape is (N, A, D)
         return transformed_points
 
     def evaluate_rbf(self, x: torch.Tensor) -> torch.Tensor:
@@ -290,13 +337,9 @@ class ScalarFieldByRBF(nn.Module):
         # radial_value = torch.norm(x_transformed, dim=-1, p=2)
         radial_value = torch.linalg.norm(x_transformed, dim=-1, ord=2)
 
-        # scale the radial distance, use inverted scale
-        if self.rbf_radial_scale is not None:
-            radial_value = radial_value / self.rbf_radial_scale.view(1, -1)
-
         # evaluate the rbf function
         func = rbfuncs.RBFFactory.create_rbf(self.rbf_type)
-        rbf_values = func(radial_value)  # (N,M)
+        rbf_values = func(radial_value, eps=self.rbf_eps_scale_sqrt.view(1, -1) ** 2)  # (N,M)
 
         # scale the rbf values
         if self.rbf_post_scale is not None:
@@ -343,5 +386,5 @@ class ScalarFieldByRBF(nn.Module):
 
         # evaluate the ambient function
         func = rbfuncs.RBFFactory.create_rbf(self.ambient_type)
-        ambient_values = func(radial_value)
+        ambient_values = func(radial_value, eps=self.ambient_eps_scale_sqrt.view(1, -1) ** 2)
         return ambient_values
