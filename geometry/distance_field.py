@@ -233,6 +233,29 @@ class ScalarFieldByRBF(nn.Module):
             self.ambient_extrinsic_translation.data.zero_()
             self.ambient_post_scale.data.fill_(1.0)
 
+    def get_rbf_transformed_points(self, x: torch.Tensor) -> torch.Tensor:
+        """transform the points x by the rbf_extrinsic_affine and rbf_extrinsic_translation
+
+        parameters
+        -----------------
+        x : torch.Tensor, shape (N, D)
+            The points to transform, for N points in D-dimensional space
+
+        returns
+        -----------------
+        transformed_points : torch.Tensor, shape (N, M, D)
+            The transformed points, for each of N points and each of M rbf components
+        """
+        assert x.shape[-1] == self.point_dim, f"point_dim is {self.point_dim}, but x.shape[-1] is {x.shape[-1]}"
+        # transform
+        affine_transform = self._get_rbf_extrinsic_affine()
+        transformed_points = igt_geom.transform_points_linear_all_to_all(
+            x, affine_transform, self.rbf_extrinsic_translation
+        )
+        # transformed_points = x @ affine_transform + self.rbf_extrinsic_translation
+        # shape is (N, M, D)
+        return transformed_points
+
     def evaluate_rbf(self, x: torch.Tensor) -> torch.Tensor:
         """
         Evaluate the rbf at the points x.
@@ -264,11 +287,12 @@ class ScalarFieldByRBF(nn.Module):
         x_transformed = igt_geom.transform_points_linear_all_to_all(x, affine_transform, self.rbf_extrinsic_translation)
 
         # compute the squared distance, result is (N,M)
-        radial_value = torch.norm(x_transformed, dim=-1, p=2)
+        # radial_value = torch.norm(x_transformed, dim=-1, p=2)
+        radial_value = torch.linalg.norm(x_transformed, dim=-1, ord=2)
 
-        # scale the radial distance
+        # scale the radial distance, use inverted scale
         if self.rbf_radial_scale is not None:
-            radial_value = radial_value * self.rbf_radial_scale.view(1, -1)
+            radial_value = radial_value / self.rbf_radial_scale.view(1, -1)
 
         # evaluate the rbf function
         func = rbfuncs.RBFFactory.create_rbf(self.rbf_type)
