@@ -1,6 +1,7 @@
 # TODO: test this
 import torch
 import torch.nn as nn
+import numpy as np
 import igpy.util_torch.radial_functions as rbfuncs
 from igpy.util_torch.radial_functions import RBFType
 import igpy.util_torch.geometry as igt_geom
@@ -30,17 +31,51 @@ class ScalarFieldByRBF(nn.Module):
     """
 
     # default settings
-    EpsScaleInitialRange = (1e-2, 100.0)
+
+    # eps scale default range
+    EpsScaleDefaultRange = (1e-3, 1e3)
+
+    # add this in initialization to prevent overflow
+    EpsScaleSmallDelta = 1e-3
 
     def __init__(
         self,
         point_dim: int,
         n_rbf_components: int,
         n_ambient_components: int,
-        rbf_type: str = RBFType.GAUSSIAN,
+        rbf_type: str = RBFType.EXPONENTIAL,
         ambient_type: str = RBFType.IDENTITY,
+        scalar_expected_range: tuple | None = None,
+        coordinate_expected_range: np.ndarray | None = None,
         enforce_similarity_transformation: bool = False,
     ):
+        """
+        Initialize the ScalarFieldByRBF class.
+
+        parameters
+        -----------------
+        point_dim : int
+            Dimensionality of the input points (e.g., 3 for 3D points).
+        n_rbf_components : int
+            Number of RBF components in the scalar field.
+        n_ambient_components : int
+            Number of ambient components in the scalar field.
+        rbf_type : str
+            Type of RBF to use, see RBFType for available types.
+        ambient_type : str
+            Type of ambient field to use, see RBFType for available types.
+        scalar_expected_range : tuple | None
+            Expected range of the scalar field values, which will affect the initialization of the RBF and ambient components.
+            If not given, use the default range, see self.EpsScaleDefaultRange.
+        coordinate_expected_range : np.ndarray | None
+            NxD array or 1xD array with auto broadcasting, expected range of the coordinates of the points.
+            This is used to initialize the RBF and ambient components.
+            coordinate_expected_range[k]=(min, max) for the k-th dimension.
+            If not given, the range is assumed to be (-1, 1) for each dimension.
+        enforce_similarity_transformation : bool
+            Whether to enforce a similarity transformation (rotation, uniform scale, and translation)
+            for the extrinsic transformations. If False, a full affine transformation is used.
+        """
         super().__init__()
 
         self.register_buffer("_n_rbf_components", torch.tensor(n_rbf_components))
@@ -54,6 +89,29 @@ class ScalarFieldByRBF(nn.Module):
         # ascii encoding of the ambient type
         ambient_type_encoded = torch.tensor([ord(c) for c in ambient_type], dtype=torch.int32)
         self.register_buffer("_ambient_type", ambient_type_encoded)
+
+        # the expected range of the scalar field values
+        # eps_logspace_range: np.ndarray = np.log10(np.array(self.EpsScaleDefaultRange))
+        if scalar_expected_range is None:
+            scalar_expected_range = self.EpsScaleDefaultRange
+        self.register_buffer("_scalar_expected_range", torch.tensor(scalar_expected_range, dtype=torch.float32))
+
+        # if the expected range is given, use it to set the eps scale range
+        abs_min = np.min(np.abs(scalar_expected_range))
+        abs_max = np.max(np.abs(scalar_expected_range))
+        if scalar_expected_range[0] * scalar_expected_range[1] < 0:
+            abs_min = 0
+        eps_logspace_range = np.log10(np.array((abs_min, abs_max)) + self.EpsScaleSmallDelta)
+
+        if coordinate_expected_range is None:
+            coordinate_expected_range = np.array([[-1, 1]] * point_dim)
+        coordinate_expected_range = np.atleast_1d(coordinate_expected_range)
+
+        if coordinate_expected_range.ndim == 1:
+            coordinate_expected_range = np.array([coordinate_expected_range] * point_dim)
+
+        assert coordinate_expected_range.shape[0] == point_dim, "coordinate_expected_range should be NxD"
+        self.register_buffer("_coordinate_expected_range", torch.tensor(coordinate_expected_range, dtype=torch.float32))
 
         # create parameters
         self.rbf_extrinsic_affine: nn.Parameter = None
@@ -69,7 +127,15 @@ class ScalarFieldByRBF(nn.Module):
         self.rbf_extrinsic_scales: nn.Parameter = None
 
         if n_rbf_components > 0:
-            self.rbf_extrinsic_translation = nn.Parameter(torch.randn(n_rbf_components, point_dim))
+            init_translation = np.random.randn(n_rbf_components, point_dim)
+            for i in range(point_dim):
+                init_translation[:, i] = np.random.uniform(
+                    coordinate_expected_range[i, 0], coordinate_expected_range[i, 1], n_rbf_components
+                )
+
+            # negate of the translation because this is extrinsic
+            self.rbf_extrinsic_translation = nn.Parameter(torch.tensor(-init_translation, dtype=torch.float32))
+
             if enforce_similarity_transformation:
                 # only applicable in 3d
                 assert point_dim == 3, "Similarity transformation is only supported in 3D"
@@ -86,8 +152,9 @@ class ScalarFieldByRBF(nn.Module):
             self.rbf_post_scale = nn.Parameter(torch.randn(n_rbf_components))
 
             # eps scale for the rbf, should be > 0
-            self.rbf_eps_scale_sqrt = nn.Parameter(torch.randn(n_rbf_components))
-            self.rbf_eps_scale_sqrt.data.uniform_(*self.EpsScaleInitialRange)
+            self.rbf_eps_scale_sqrt = nn.Parameter(
+                torch.sqrt(torch.exp(torch.tensor(np.random.uniform(*eps_logspace_range, n_rbf_components)))).float()
+            )
 
         # for ambient field
         self.ambient_extrinsic_affine: nn.Parameter = None
@@ -98,7 +165,12 @@ class ScalarFieldByRBF(nn.Module):
         self.ambient_extrinsic_scales: nn.Parameter = None
 
         if n_ambient_components > 0:
-            self.ambient_extrinsic_translation = nn.Parameter(torch.randn(n_ambient_components, point_dim))
+            init_translation = np.random.randn(n_ambient_components, point_dim)
+            for i in range(point_dim):
+                init_translation[:, i] = np.random.uniform(
+                    coordinate_expected_range[i, 0], coordinate_expected_range[i, 1], n_ambient_components
+                )
+            self.ambient_extrinsic_translation = nn.Parameter(torch.tensor(-init_translation, dtype=torch.float32))
             if enforce_similarity_transformation:
                 # only applicable in 3d
                 assert point_dim == 3, "Similarity transformation is only supported in 3D"
@@ -116,8 +188,11 @@ class ScalarFieldByRBF(nn.Module):
 
             # eps scale for the ambient, should be > 0
             # this is used to scale the output of the ambient
-            self.ambient_eps_scale_sqrt = nn.Parameter(torch.randn(n_ambient_components))
-            self.ambient_eps_scale_sqrt.data.uniform_(*self.EpsScaleInitialRange)
+            self.ambient_eps_scale_sqrt = nn.Parameter(
+                torch.sqrt(
+                    torch.exp(torch.tensor(np.random.uniform(*eps_logspace_range, n_ambient_components)))
+                ).float()
+            )
 
         # done with initialization
 
