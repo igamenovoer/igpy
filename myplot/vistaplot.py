@@ -264,7 +264,12 @@ class ExPlotter:
         self.m_plotter : pv.BasePlotter = None
         
     @classmethod
-    def init_with_background_plotter(cls, with_menu = False, with_toolbar = False, title:str = None, *args, **kwargs):
+    def init_with_background_plotter(cls, 
+                                     with_menu = False, 
+                                     with_toolbar = False, 
+                                     title:str = None,
+                                     background_color3f = None, # Renamed parameter
+                                     *args, **kwargs):
         from pyvistaqt import BackgroundPlotter
         out = ExPlotter()
         out.m_plotter = BackgroundPlotter(*args, title=title, **kwargs)
@@ -274,14 +279,24 @@ class ExPlotter:
         if not with_toolbar:
             out.m_plotter.default_camera_tool_bar.setVisible(False)
             out.m_plotter.saved_cameras_tool_bar.setVisible(False)
+        
+        if background_color3f is not None: # Set background if provided
+            out.m_plotter.set_background(background_color3f)
             
         out.m_plotter.show_axes()   # by default, show axes
         return out
      
     @classmethod   
-    def init_with_std_plotter(cls, title : str = None, *args, **kwargs):
+    def init_with_std_plotter(cls, 
+                              title : str = None, 
+                              background_color3f = None, # Renamed parameter
+                              *args, **kwargs):
         out = ExPlotter()
         out.m_plotter = pv.Plotter(*args, notebook=False, title = title, **kwargs)
+        
+        if background_color3f is not None: # Set background if provided
+            out.m_plotter.set_background(background_color3f)
+            
         out.m_plotter.show_axes()
         return out
         
@@ -293,6 +308,25 @@ class ExPlotter:
         
     def get_image(self) -> np.ndarray:
         return self.m_plotter.screenshot()
+        
+    def set_background_color(self, color3f, top=None, right=None, all_renderers=True): # Renamed parameter
+        """ Set the background color of the plotter.
+
+        Parameters
+        ----------
+        color3f : str or sequence
+            Color of the background. Ideally a sequence of 3 float RGB values 
+            (e.g., [0.0, 0.5, 1.0], range 0-1). 
+            PyVista also accepts string names (e.g., 'white') or hex strings.
+        top : str or sequence, optional
+            Color of the background at the top. If specified, a gradient is created.
+        right : str or sequence, optional
+            Color of the background at the right. If specified, a gradient is created.
+        all_renderers : bool, optional
+            If True (default), applies the background color to all renderers.
+        """
+        if self.m_plotter:
+            self.m_plotter.set_background(color3f, top=top, right=right, all_renderers=all_renderers) # Use renamed parameter
         
     def set_image_size(self, height : int, width : int):
         self.m_plotter.window_size = [width, height]
@@ -541,20 +575,120 @@ class ExPlotter:
         obj = self.add_line_segments(pts[u], pts[v], color3f=color3f, line_width=line_width)
         return obj
     
-    def add_line_segments(self, pts1 : np.ndarray, pts2 : np.ndarray, 
-                          color3f : np.ndarray = None, line_width : float =None) -> pv.Actor:
-        ''' add lines connecting pts1[k] to pts2[k]
-        '''
-        if color3f is None:
-            color3f = np.ones(3, dtype=float)
-        if line_width is None:
-            line_width = 1.0
+    def add_line_segments(self, pts1 : np.ndarray, pts2 : np.ndarray,
+                          color3f : np.ndarray = None, line_width : float = None,
+                          with_arrow: bool = False, 
+                          arrow_head_size: float = None, 
+                          arrow_thickness: float = None,
+                          **kwargs) -> pv.Actor:
+        ''' add lines connecting pts1[k] to pts2[k], or arrows if specified.
+        
+        parameters
+        --------------
+        pts1 : np.ndarray
+            (N,3) array of starting points.
+        pts2 : np.ndarray
+            (N,3) array of ending points.
+        color3f : np.ndarray, optional
+            (3,) array for the color. Defaults to [1,1,1].
+        line_width : float, optional
+            The width of the lines. For arrows, this controls the line width if 
+            `style='wireframe'` or `show_edges=True` is passed in kwargs. Defaults to 1.0 for lines.
+        with_arrow : bool, optional
+            If True, plot arrows from pts1 to pts2 instead of lines. Defaults to False.
+        arrow_head_size : float, optional
+            Radius of the arrow head for the template arrow. This radius is relative 
+            to a template arrow of length 1. The final head size will scale 
+            with the arrow's actual length. Default: 0.1.
+        arrow_thickness : float, optional
+            Radius of the arrow shaft for the template arrow. This radius is relative 
+            to a template arrow of length 1. The final shaft thickness will scale 
+            with the arrow's actual length. Default: 0.05.
+        **kwargs
+            Additional keyword arguments passed to PyVista's add_lines() or add_mesh() (for arrows).
             
-        color3f = np.array(color3f).astype(float)
-        pts1 = np.atleast_2d(pts1)
-        pts2 = np.atleast_2d(pts2)
-        pts_input = np.column_stack((pts1,pts2)).reshape((-1,3))
-        obj = self.m_plotter.add_lines(pts_input, color=color3f, width=line_width)
+        return
+        ---------
+        actor
+            The pv actor of the lines or arrows, or None if no geometry was created.
+        '''
+        _final_color = color3f
+        if _final_color is None:
+            _final_color = np.array([1.0, 1.0, 1.0]) # Default color
+        else:
+            _final_color = np.array(_final_color, dtype=float).flatten()
+
+        _final_line_width = line_width # Used for lines, and for arrows if style is wireframe/edges shown
+
+        pts1_arr = np.atleast_2d(pts1)
+        pts2_arr = np.atleast_2d(pts2)
+        
+        obj = None # Initialize object to be returned
+
+        if with_arrow:
+            # Default values for arrow geometry if not provided
+            final_arrow_head_size = arrow_head_size if arrow_head_size is not None else 0.1
+            final_arrow_thickness = arrow_thickness if arrow_thickness is not None else 0.05
+            # Tip length is a proportion of the arrow's unit length.
+            # PyVista's default for pv.Arrow tip_length is 0.35. We used 0.25 in a prior version.
+            final_arrow_tip_length_ratio = 0.25 
+
+            arrow_geom = pv.Arrow(
+                direction=(1.0, 0.0, 0.0), # Template direction for a unit arrow
+                tip_length=final_arrow_tip_length_ratio, 
+                tip_radius=final_arrow_head_size,    
+                shaft_radius=final_arrow_thickness,  
+                scale=1.0 # Template is unit scale; glyph 'scale_factor' handles actual length.
+            )
+
+            directions = pts2_arr - pts1_arr
+            magnitudes = np.linalg.norm(directions, axis=1)
+            
+            norm_directions = np.zeros_like(directions, dtype=float)
+            non_zero_mag_mask = magnitudes > 1e-9
+            
+            if np.any(non_zero_mag_mask):
+                valid_magnitudes_for_division = magnitudes[non_zero_mag_mask]
+                if valid_magnitudes_for_division.ndim == 1:
+                    valid_magnitudes_for_division = valid_magnitudes_for_division[:, np.newaxis]
+                norm_directions[non_zero_mag_mask] = directions[non_zero_mag_mask] / valid_magnitudes_for_division
+            
+            norm_directions = np.nan_to_num(norm_directions, nan=0.0, posinf=0.0, neginf=0.0)
+
+            glyph_points_pd = pv.PolyData(pts1_arr)
+            glyph_points_pd.point_data['vectors'] = norm_directions 
+            glyph_points_pd.set_active_vectors('vectors') 
+            glyph_points_pd.point_data['scale_factor'] = magnitudes
+
+            pv_call_kwargs = kwargs.copy()
+            pv_call_kwargs['color'] = _final_color
+            if _final_line_width is not None:
+                 pv_call_kwargs['line_width'] = _final_line_width
+            
+            pv_call_kwargs.setdefault('style', 'surface')
+
+            glyphs_mesh = glyph_points_pd.glyph(
+                geom=arrow_geom,
+                orient='vectors',
+                scale='scale_factor', # Use magnitudes to scale the unit arrow template
+                factor=1.0 
+            )
+            
+            if glyphs_mesh.n_points > 0: # Only add if glyphs were actually created
+                obj = self.m_plotter.add_mesh(glyphs_mesh, **pv_call_kwargs)
+        else:
+            # Original functionality: add lines
+            _effective_width_for_add_lines = 1.0
+            if line_width is not None: 
+                _effective_width_for_add_lines = line_width
+            
+            if pts1_arr.ndim == 1: pts1_arr = pts1_arr[np.newaxis, :]
+            if pts2_arr.ndim == 1: pts2_arr = pts2_arr[np.newaxis, :]
+
+            if pts1_arr.shape[0] > 0: # Check if there are any points to draw
+                pts_input = np.column_stack((pts1_arr, pts2_arr)).reshape((-1, 3))
+                obj = self.m_plotter.add_lines(pts_input, color=_final_color,
+                                               width=_effective_width_for_add_lines, **kwargs)
         return obj
     
     def add_points(self, pts : np.ndarray, 
@@ -602,6 +736,64 @@ class ExPlotter:
 
         return actor
     
+    def add_text(self, 
+                           text_content: str, 
+                           position: np.ndarray, 
+                           font_size: float = 10, 
+                           color3f = None, # Changed from color to color3f
+                           font_family: str = 'arial',
+                           bold: bool = False,
+                           italic: bool = False,
+                           shadow: bool = False,
+                           **kwargs) -> pv.Actor:
+        ''' Add text in 3D space that always faces the camera (billboard text).
+        
+        parameters
+        -------------
+        text_content : str
+            The text string to display.
+        position : np.ndarray
+            (3,) array for the 3D position of the text.
+        font_size : float
+            The size of the font.
+        color3f : str or sequence, optional # Changed from color to color3f
+            Color of the text. Can be a string name (e.g., 'white'), a hex string, or a sequence of RGB values.
+            Defaults to PyVista's theme color.
+        font_family : str
+            Font family for the text (e.g., 'arial', 'courier', 'times').
+        bold : bool
+            Whether the text should be bold.
+        italic : bool
+            Whether the text should be italic.
+        shadow : bool
+            Whether the text should have a shadow (can improve readability).
+        **kwargs
+            Additional keyword arguments passed to self.m_plotter.add_point_labels().
+            
+        return
+        ---------
+        actor
+            The pv actor for the text labels.
+        '''
+        position = np.array(position).reshape(1, 3) # add_point_labels expects a list/array of points
+        labels = [text_content]
+        
+        # Ensure no actual point marker is drawn, only the label
+        kwargs.setdefault('show_points', False)
+        # Make the backing shape for the label transparent if one exists by default
+        kwargs.setdefault('shape_opacity', 0.0) 
+
+        actor = self.m_plotter.add_point_labels(points=position, 
+                                                labels=labels,
+                                                font_size=font_size,
+                                                text_color=color3f, # Changed from color to color3f
+                                                font_family=font_family,
+                                                bold=bold,
+                                                italic=italic,
+                                                shadow=shadow,
+                                                **kwargs)
+        return actor
+    
     def set_camera_transform_by_vectors(self, view_dir : np.ndarray, up_dir : np.ndarray, position : np.ndarray, focal_distance = None):
         camera_set_transform_by_vectors(self.m_plotter.camera, pos=position, view_dir=view_dir, 
                                         up_dir=up_dir, focal_distance=focal_distance)
@@ -609,14 +801,4 @@ class ExPlotter:
         
     def set_camera_transform_by_4x4(self, gltf_transmat : np.ndarray):
         camera_set_transform_by_4x4(self.m_plotter.camera, gltf_transmat)
-        self.m_plotter.camera.Modified()       
-        
-    def set_camera_vertical_fov(self, fovy_rad : float):
-        self.m_plotter.camera.view_angle = np.rad2deg(fovy_rad)
-    
-    def show(self):
-        self.m_plotter.show()
-        
-    @property
-    def plotter(self)->pv.BasePlotter:
-        return self.m_plotter
+        self.m_plotter.camera.Modified()
