@@ -686,7 +686,6 @@ class ExPlotter:
         line_width: float = None,
         with_arrow: bool = False,
         arrow_head_size: float = None,
-        arrow_thickness: float = None,
         shading: str = None,
         metallic: float = None,
         roughness: float = None,
@@ -703,18 +702,16 @@ class ExPlotter:
         color3f : np.ndarray, optional
             (3,) array for the color. Defaults to [1,1,1].
         line_width : float, optional
-            The width of the lines. For arrows, this controls the line width if
-            `style='wireframe'` or `show_edges=True` is passed in kwargs. Defaults to 1.0 for lines.
+            Controls the thickness:
+            - For simple lines (`with_arrow=False`): Sets the line width. Defaults to 1.0 if not specified.
+            - For arrows (`with_arrow=True`): Sets the **radius of the arrow shaft**. Defaults to 0.05 for the shaft radius if not specified.
+            This parameter also sets the line width for arrow edges if they are shown (e.g., via `style='wireframe'` or `show_edges=True` in `kwargs`); PyVista's default is used if `line_width` is not specified here.
         with_arrow : bool, optional
             If True, plot arrows from pts1 to pts2 instead of lines. Defaults to False.
         arrow_head_size : float, optional
             Radius of the arrow head for the template arrow. This radius is relative
             to a template arrow of length 1. The final head size will scale
             with the arrow's actual length. Default: 0.1.
-        arrow_thickness : float, optional
-            Radius of the arrow shaft for the template arrow. This radius is relative
-            to a template arrow of length 1. The final shaft thickness will scale
-            with the arrow's actual length. Default: 0.05.
         shading : str, optional
             Shading style, primarily for arrows (when `with_arrow=True`).
             Options are 'flat', 'smooth', 'pbr', or 'albedo'.
@@ -742,10 +739,6 @@ class ExPlotter:
         else:
             _final_color = np.array(_final_color, dtype=float).flatten()
 
-        _final_line_width = (
-            line_width  # Used for lines, and for arrows if style is wireframe/edges shown
-        )
-
         pts1_arr = np.atleast_2d(pts1)
         pts2_arr = np.atleast_2d(pts2)
 
@@ -754,16 +747,14 @@ class ExPlotter:
         if with_arrow:
             # Default values for arrow geometry if not provided
             final_arrow_head_size = arrow_head_size if arrow_head_size is not None else 0.1
-            final_arrow_thickness = arrow_thickness if arrow_thickness is not None else 0.05
-            # Tip length is a proportion of the arrow's unit length.
-            # PyVista's default for pv.Arrow tip_length is 0.35. We used 0.25 in a prior version.
+            shaft_radius_from_line_width = line_width if line_width is not None else 0.05
             final_arrow_tip_length_ratio = 0.25
 
             arrow_geom = pv.Arrow(
                 direction=(1.0, 0.0, 0.0),  # Template direction for a unit arrow
                 tip_length=final_arrow_tip_length_ratio,
                 tip_radius=final_arrow_head_size,
-                shaft_radius=final_arrow_thickness,
+                shaft_radius=shaft_radius_from_line_width,
                 scale=1.0,  # Template is unit scale; glyph 'scale_factor' handles actual length.
             )
 
@@ -790,8 +781,8 @@ class ExPlotter:
 
             pv_call_kwargs = kwargs.copy()
             pv_call_kwargs["color"] = _final_color
-            if _final_line_width is not None:
-                pv_call_kwargs["line_width"] = _final_line_width
+            if line_width is not None:
+                pv_call_kwargs["line_width"] = line_width
 
             pv_call_kwargs.setdefault("style", "surface")
 
