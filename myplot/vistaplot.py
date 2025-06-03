@@ -284,6 +284,10 @@ def camera_apply_transform(cam: pv.Camera, transmat: np.ndarray, relative_to="gl
 class ExPlotter:
     """extended pyvista plotter with some helper functions"""
 
+    DefaultBackgroundColor = np.array([0.8, 0.8, 0.8])  # Default background color
+    ArrowHeadSizeRelative = 0.7  # Default arrow head size relative to arrow length
+    ArrowShaftRadiusRelative = 0.015  # Default arrow shaft radius relative to arrow length
+
     def __init__(self) -> None:
         self.m_plotter: pv.BasePlotter = None
 
@@ -299,6 +303,9 @@ class ExPlotter:
     ):
         from pyvistaqt import BackgroundPlotter
 
+        if background_color3f is None:
+            background_color3f = cls.DefaultBackgroundColor
+
         out = ExPlotter()
         out.m_plotter = BackgroundPlotter(*args, title=title, **kwargs)
         if not with_menu:
@@ -308,8 +315,7 @@ class ExPlotter:
             out.m_plotter.default_camera_tool_bar.setVisible(False)
             out.m_plotter.saved_cameras_tool_bar.setVisible(False)
 
-        if background_color3f is not None:  # Set background if provided
-            out.m_plotter.set_background(background_color3f)
+        out.m_plotter.set_background(background_color3f)
 
         out.m_plotter.show_axes()  # by default, show axes
         return out
@@ -321,8 +327,9 @@ class ExPlotter:
         out = ExPlotter()
         out.m_plotter = pv.Plotter(*args, notebook=False, title=title, **kwargs)
 
-        if background_color3f is not None:  # Set background if provided
-            out.m_plotter.set_background(background_color3f)
+        if background_color3f is None:
+            background_color3f = cls.DefaultBackgroundColor
+        out.m_plotter.set_background(background_color3f)
 
         out.m_plotter.show_axes()
         return out
@@ -683,9 +690,9 @@ class ExPlotter:
         pts1: np.ndarray,
         pts2: np.ndarray,
         color3f: np.ndarray = None,
-        line_width: float = None,
+        line_width: float | None = None,
         with_arrow: bool = False,
-        arrow_head_size: float = None,
+        arrow_head_size: float | None = None,
         shading: str = None,
         metallic: float = None,
         roughness: float = None,
@@ -700,18 +707,18 @@ class ExPlotter:
         pts2 : np.ndarray
             (N,3) array of ending points.
         color3f : np.ndarray, optional
-            (3,) array for the color. Defaults to [1,1,1].
-        line_width : float, optional
+            (3,) array for the color. Defaults to [1,1,1].        line_width : float, optional
             Controls the thickness:
             - For simple lines (`with_arrow=False`): Sets the line width. Defaults to 1.0 if not specified.
-            - For arrows (`with_arrow=True`): Sets the **radius of the arrow shaft**. Defaults to 0.05 for the shaft radius if not specified.
+            - For arrows (`with_arrow=True`): Sets the **radius of the arrow shaft**.
+              If not specified, automatically computed based on the spatial extent of the points.
             This parameter also sets the line width for arrow edges if they are shown (e.g., via `style='wireframe'` or `show_edges=True` in `kwargs`); PyVista's default is used if `line_width` is not specified here.
         with_arrow : bool, optional
-            If True, plot arrows from pts1 to pts2 instead of lines. Defaults to False.
-        arrow_head_size : float, optional
+            If True, plot arrows from pts1 to pts2 instead of lines. Defaults to False.        arrow_head_size : float, optional
             Radius of the arrow head for the template arrow. This radius is relative
             to a template arrow of length 1. The final head size will scale
-            with the arrow's actual length. Default: 0.1.
+            with the arrow's actual length.
+            If not specified, automatically computed based on the typical length of the arrow segments.
         shading : str, optional
             Shading style, primarily for arrows (when `with_arrow=True`).
             Options are 'flat', 'smooth', 'pbr', or 'albedo'.
@@ -726,9 +733,7 @@ class ExPlotter:
         roughness : float, optional
             Roughness property for PBR arrows (0.0 to 1.0). Used if `shading='pbr'`.
         **kwargs
-            Additional keyword arguments passed to PyVista's add_lines() or add_mesh() (for arrows).
-
-        return
+            Additional keyword arguments passed to PyVista's add_lines() or add_mesh() (for arrows).        return
         ---------
         actor
             The pv actor of the lines or arrows, or None if no geometry was created.
@@ -745,9 +750,36 @@ class ExPlotter:
         obj = None  # Initialize object to be returned
 
         if with_arrow:
+            # Compute directions and magnitudes first (needed for auto-sizing)
+            directions = pts2_arr - pts1_arr
+            magnitudes = np.linalg.norm(
+                directions, axis=1
+            )  # Auto-compute line_width and arrow_head_size if not provided
+            if line_width is None or arrow_head_size is None:
+                # Combine all points to compute bounding box diagonal
+                # This gives us the overall spatial extent of the data
+                all_points = np.vstack([pts1_arr, pts2_arr])
+                bbox_min = np.min(all_points, axis=0)
+                bbox_max = np.max(all_points, axis=0)
+                bbox_diagonal = np.linalg.norm(bbox_max - bbox_min)
+
+                # Compute average line segment length
+                # This represents the typical scale of individual arrows
+                avg_segment_length = np.mean(magnitudes) if len(magnitudes) > 0 else 1.0
+
+                # Set defaults based on geometry:
+                # - line_width: relative of the bounding box diagonal (scales with overall data size)
+                # - arrow_head_size: relative of average segment length (scales with typical arrow size)
+                computed_line_width = self.ArrowShaftRadiusRelative * bbox_diagonal
+                computed_arrow_head_size = self.ArrowHeadSizeRelative * avg_segment_length
+
             # Default values for arrow geometry if not provided
-            final_arrow_head_size = arrow_head_size if arrow_head_size is not None else 0.1
-            shaft_radius_from_line_width = line_width if line_width is not None else 0.05
+            final_arrow_head_size = (
+                arrow_head_size if arrow_head_size is not None else computed_arrow_head_size
+            )
+            shaft_radius_from_line_width = (
+                line_width if line_width is not None else computed_line_width
+            )
             final_arrow_tip_length_ratio = 0.25
 
             arrow_geom = pv.Arrow(
@@ -757,9 +789,6 @@ class ExPlotter:
                 shaft_radius=shaft_radius_from_line_width,
                 scale=1.0,  # Template is unit scale; glyph 'scale_factor' handles actual length.
             )
-
-            directions = pts2_arr - pts1_arr
-            magnitudes = np.linalg.norm(directions, axis=1)
 
             norm_directions = np.zeros_like(directions, dtype=float)
             non_zero_mag_mask = magnitudes > 1e-9
@@ -908,7 +937,7 @@ class ExPlotter:
         self,
         text_content: str,
         position: np.ndarray,
-        font_size: float = 10,
+        font_size: float | None = None,
         color3f=None,  # Changed from color to color3f
         font_family: str = "arial",
         bold: bool = False,
@@ -945,6 +974,9 @@ class ExPlotter:
         actor
             The pv actor for the text labels.
         """
+        if font_size is None:
+            font_size = 10
+
         position = np.array(position).reshape(
             1, 3
         )  # add_point_labels expects a list/array of points
