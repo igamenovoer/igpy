@@ -57,7 +57,9 @@ def read_gltf(
         if verbose:
             print(
                 "loading mesh ({ith}/{total}) {name}".format(
-                    ith=idx, total=len(infolist) - 1, name=mesh_info.m_instance_name
+                    ith=idx,
+                    total=len(infolist) - 1,
+                    name=mesh_info.m_instance_name,
                 ),
                 flush=True,
             )
@@ -179,7 +181,9 @@ def make_axis(origin, xyz_dirs, axlen=1.0, thickness=1.0) -> pv.AxesActor:
     axis_actor
         the axis actor that can be added to plotter
     """
-    obj = pv.create_axes_marker(line_width=thickness, shaft_length=axlen, labels_off=True)
+    obj = pv.create_axes_marker(
+        line_width=thickness, shaft_length=axlen, labels_off=True
+    )
     tmat = np.eye(4)
     tmat[:3, :3] = xyz_dirs
     tmat[-1, :3] = origin
@@ -188,7 +192,9 @@ def make_axis(origin, xyz_dirs, axlen=1.0, thickness=1.0) -> pv.AxesActor:
     return obj
 
 
-def camera_set_transform_by_4x4(cam: pv.Camera, transmat: np.ndarray, focal_distance: float = None):
+def camera_set_transform_by_4x4(
+    cam: pv.Camera, transmat: np.ndarray, focal_distance: float = None
+):
     """set camera transform using GLTF 4x4 right-mul transformation matrix"""
     R = transmat[:3, :3]
     left, up, forward = R
@@ -199,7 +205,11 @@ def camera_set_transform_by_4x4(cam: pv.Camera, transmat: np.ndarray, focal_dist
 
 
 def camera_set_transform_by_vectors(
-    cam: pv.Camera, pos: np.ndarray, view_dir: np.ndarray, up_dir: np.ndarray, focal_distance=None
+    cam: pv.Camera,
+    pos: np.ndarray,
+    view_dir: np.ndarray,
+    up_dir: np.ndarray,
+    focal_distance=None,
 ):
     """set world transformation of the camera
 
@@ -256,7 +266,9 @@ def camera_make_transform_by_view_up_pos(
     return tmat
 
 
-def camera_apply_transform(cam: pv.Camera, transmat: np.ndarray, relative_to="global"):
+def camera_apply_transform(
+    cam: pv.Camera, transmat: np.ndarray, relative_to="global"
+):
     """apply a 4x4 transformation to the camera
 
     parameters
@@ -284,9 +296,15 @@ def camera_apply_transform(cam: pv.Camera, transmat: np.ndarray, relative_to="gl
 class ExPlotter:
     """extended pyvista plotter with some helper functions"""
 
-    DefaultBackgroundColor = np.array([0.8, 0.8, 0.8])  # Default background color
-    ArrowHeadSizeRelative = 0.7  # Default arrow head size relative to arrow length
-    ArrowShaftRadiusRelative = 0.015  # Default arrow shaft radius relative to arrow length
+    DefaultBackgroundColor = np.array(
+        [0.8, 0.8, 0.8]
+    )  # Default background color
+    ArrowHeadSizeRelative = (
+        0.7  # Default arrow head size relative to arrow length
+    )
+    ArrowShaftRadiusRelative = (
+        0.015  # Default arrow shaft radius relative to arrow length
+    )
 
     def __init__(self) -> None:
         self.m_plotter: pv.BasePlotter = None
@@ -322,7 +340,11 @@ class ExPlotter:
 
     @classmethod
     def init_with_std_plotter(
-        cls, title: str = None, background_color3f=None, *args, **kwargs  # Renamed parameter
+        cls,
+        title: str = None,
+        background_color3f=None,
+        *args,
+        **kwargs,  # Renamed parameter
     ):
         out = ExPlotter()
         out.m_plotter = pv.Plotter(*args, notebook=False, title=title, **kwargs)
@@ -421,7 +443,9 @@ class ExPlotter:
         actor
             the pv actor of the mesh
         """
-        pvmesh = make_pvmesh_from_trimesh(mesh_object, with_texture=with_texture)
+        pvmesh = make_pvmesh_from_trimesh(
+            mesh_object, with_texture=with_texture
+        )
 
         if color3f is not None:
             color3f = np.array(color3f, dtype=float).tolist()
@@ -437,17 +461,23 @@ class ExPlotter:
             shading_lower = shading.lower()
             if shading_lower == "albedo":
                 processed_kwargs["lighting"] = False
-                pv_smooth_shading = False  # Unlit, so no real smoothing effect from light
+                pv_smooth_shading = (
+                    False  # Unlit, so no real smoothing effect from light
+                )
                 pv_pbr = False
             elif shading_lower == "flat":
                 pv_smooth_shading = False
                 pv_pbr = False
-                if "lighting" not in kwargs:  # Default to lit for this style if not specified
+                if (
+                    "lighting" not in kwargs
+                ):  # Default to lit for this style if not specified
                     processed_kwargs["lighting"] = True
             elif shading_lower == "smooth":
                 pv_smooth_shading = True
                 pv_pbr = False
-                if "lighting" not in kwargs:  # Default to lit for this style if not specified
+                if (
+                    "lighting" not in kwargs
+                ):  # Default to lit for this style if not specified
                     processed_kwargs["lighting"] = True
             elif shading_lower == "pbr":
                 pv_smooth_shading = True  # PBR typically implies smooth shading
@@ -541,7 +571,11 @@ class ExPlotter:
         return out
 
     def add_volume_as_label_map(
-        self, vol: np.ndarray, color4f: np.ndarray = None, opacity: float = None, **kwargs
+        self,
+        vol: np.ndarray,
+        color4f: np.ndarray = None,
+        opacity: float = None,
+        **kwargs,
     ) -> pv.Actor:
         """add a solid volume to display, where the volume is represented as a label map.
         Each voxel is assigned a label, and the label is used to determine the color of the voxel.
@@ -558,7 +592,9 @@ class ExPlotter:
         opacity : float
             the opacity of the volume, if specified, it will override the alpha channel of color4f
         """
-        assert vol.ndim == 3 and vol.dtype == int, "only support 3d int-type label map"
+        assert (
+            vol.ndim == 3 and vol.dtype == int
+        ), "only support 3d int-type label map"
 
         import einops
 
@@ -576,13 +612,17 @@ class ExPlotter:
             if opacity is None:
                 color4u[:, -1] = 255
             else:
-                color4u[:, -1] = np.maximum(min_alpha, opacity * 255).astype(np.uint8)
+                color4u[:, -1] = np.maximum(min_alpha, opacity * 255).astype(
+                    np.uint8
+                )
             color4u[0] = (0, 0, 0, min_alpha)
             scalars = color4u[idmap]
         else:
             color4u = (np.array(color4f) * 255).astype(np.uint8)
             if opacity is not None:
-                color4u[:, -1] = np.maximum(min_alpha, opacity * 255).astype(np.uint8)
+                color4u[:, -1] = np.maximum(min_alpha, opacity * 255).astype(
+                    np.uint8
+                )
             color4u[:, -1] = np.maximum(color4u[:, -1], min_alpha)
             scalars = color4u[vol]
 
@@ -590,7 +630,9 @@ class ExPlotter:
         out = self.m_plotter.add_volume(vol, scalars=scalars, **kwargs)
         return out
 
-    def add_volume_as_scalar_field(self, vol: np.ndarray, cmap: str = None, **kwargs) -> pv.Actor:
+    def add_volume_as_scalar_field(
+        self, vol: np.ndarray, cmap: str = None, **kwargs
+    ) -> pv.Actor:
         """add a solid volume to display, where the volume is represented as a scalar field.
 
         parameters
@@ -630,7 +672,9 @@ class ExPlotter:
         )
         return actor
 
-    def add_axes(self, origin, xyz_dirs, axis_length=1.0, line_width=None) -> pv.AxesActor:
+    def add_axes(
+        self, origin, xyz_dirs, axis_length=1.0, line_width=None
+    ) -> pv.AxesActor:
         if line_width is None:
             line_width = 1.0
 
@@ -642,14 +686,20 @@ class ExPlotter:
         # pts_draw = np.column_stack([pts1, pts2]).reshape(-1,3)
         # axis_actor = self.m_plotter.add_lines(pts_draw, color=np.eye(3))
 
-        axis_actor = make_axis(origin, xyz_dirs, axlen=axis_length, thickness=line_width)
+        axis_actor = make_axis(
+            origin, xyz_dirs, axlen=axis_length, thickness=line_width
+        )
         axis_actor.SetConeResolution(4)
         axis_actor.SetConeRadius(0.01)
         self.m_plotter.add_actor(axis_actor)
         return axis_actor
 
     def add_axes_many(
-        self, origins: np.ndarray, xyz_dirs: np.ndarray, axis_length=1.0, line_width=None
+        self,
+        origins: np.ndarray,
+        xyz_dirs: np.ndarray,
+        axis_length=1.0,
+        line_width=None,
     ):
         """add many axes as line segments to the plot
 
@@ -670,9 +720,13 @@ class ExPlotter:
         for i in (0, 1, 2):
             pts_1 = origins
             pts_2 = xyz_dirs[:, i, :] * axis_length + pts_1
-            self.add_line_segments(pts_1, pts_2, color3f=colors[i], line_width=line_width)
+            self.add_line_segments(
+                pts_1, pts_2, color3f=colors[i], line_width=line_width
+            )
 
-    def add_box(self, box: Box_3, color3f: np.ndarray = None, line_width: float = None) -> pv.Actor:
+    def add_box(
+        self, box: Box_3, color3f: np.ndarray = None, line_width: float = None
+    ) -> pv.Actor:
         """draw a box"""
         if color3f is None:
             color3f = np.ones(3, dtype=float)
@@ -682,7 +736,9 @@ class ExPlotter:
         color3f = np.array(color3f).astype(float)
         pts = box.get_points()
         u, v = box.get_edges().T
-        obj = self.add_line_segments(pts[u], pts[v], color3f=color3f, line_width=line_width)
+        obj = self.add_line_segments(
+            pts[u], pts[v], color3f=color3f, line_width=line_width
+        )
         return obj
 
     def add_line_segments(
@@ -707,7 +763,11 @@ class ExPlotter:
         pts2 : np.ndarray
             (N,3) array of ending points.
         color3f : np.ndarray, optional
-            (3,) array for the color. Defaults to [1,1,1].        line_width : float, optional
+            Color for the lines/arrows.
+            - If None (default): uses white [1.0, 1.0, 1.0].
+            - If a (3,) array: specifies a single RGB color (0.0-1.0) for all segments/arrows.
+            - If an (N,3) array: specifies an RGB color (0.0-1.0) for each of the N segments/arrows.
+        line_width : float, optional
             Controls the thickness:
             - For simple lines (`with_arrow=False`): Sets the line width. Defaults to 1.0 if not specified.
             - For arrows (`with_arrow=True`): Sets the **radius of the arrow shaft**.
@@ -738,44 +798,80 @@ class ExPlotter:
         actor
             The pv actor of the lines or arrows, or None if no geometry was created.
         """
-        _final_color = color3f
-        if _final_color is None:
-            _final_color = np.array([1.0, 1.0, 1.0])  # Default color
-        else:
-            _final_color = np.array(_final_color, dtype=float).flatten()
-
         pts1_arr = np.atleast_2d(pts1)
         pts2_arr = np.atleast_2d(pts2)
+        num_segments = pts1_arr.shape[0]
+
+        if num_segments == 0 or pts1_arr.shape[0] != pts2_arr.shape[0]:
+            # No segments to draw or mismatched input arrays
+            return None
+
+        _single_color_rgb_float = None  # For single color (0.0-1.0 float)
+        _multiple_colors_rgb_uint8 = None  # For N colors (0-255 uint8)
+
+        if color3f is None:
+            _single_color_rgb_float = np.array([1.0, 1.0, 1.0])  # Default color
+        else:
+            _color_input_arr = np.array(color3f, dtype=float)
+            if (
+                _color_input_arr.ndim == 2
+                and _color_input_arr.shape[0] == num_segments
+                and _color_input_arr.shape[1] == 3
+            ):
+                # (N,3) colors provided
+                _multiple_colors_rgb_uint8 = (
+                    np.clip(_color_input_arr, 0.0, 1.0) * 255
+                ).astype(np.uint8)
+            elif _color_input_arr.size == 3:  # Single color
+                _single_color_rgb_float = np.clip(
+                    _color_input_arr.flatten(), 0.0, 1.0
+                )
+            else:
+                print(
+                    f"Warning: Invalid color3f format (shape {_color_input_arr.shape}). Expected (3,) or ({num_segments},3) for {num_segments} segments. Using default color."
+                )
+                _single_color_rgb_float = np.array([1.0, 1.0, 1.0])
 
         obj = None  # Initialize object to be returned
 
         if with_arrow:
             # Compute directions and magnitudes first (needed for auto-sizing)
             directions = pts2_arr - pts1_arr
-            magnitudes = np.linalg.norm(
-                directions, axis=1
-            )  # Auto-compute line_width and arrow_head_size if not provided
+            magnitudes = np.linalg.norm(directions, axis=1)
+
+            computed_line_width = None
+            computed_arrow_head_size = None
             if line_width is None or arrow_head_size is None:
-                # Combine all points to compute bounding box diagonal
-                # This gives us the overall spatial extent of the data
                 all_points = np.vstack([pts1_arr, pts2_arr])
                 bbox_min = np.min(all_points, axis=0)
                 bbox_max = np.max(all_points, axis=0)
                 bbox_diagonal = np.linalg.norm(bbox_max - bbox_min)
+                avg_segment_length = (
+                    np.mean(magnitudes) if len(magnitudes) > 0 else 1.0
+                )
+                if hasattr(self, "ArrowShaftRadiusRelative") and hasattr(
+                    self, "ArrowHeadSizeRelative"
+                ):
+                    computed_line_width = (
+                        self.ArrowShaftRadiusRelative * bbox_diagonal
+                    )
+                    computed_arrow_head_size = (
+                        self.ArrowHeadSizeRelative * avg_segment_length
+                    )
+                else:  # Fallback if attributes are missing
+                    computed_line_width = (
+                        0.01 * bbox_diagonal if bbox_diagonal > 0 else 0.01
+                    )
+                    computed_arrow_head_size = (
+                        0.1 * avg_segment_length
+                        if avg_segment_length > 0
+                        else 0.1
+                    )
 
-                # Compute average line segment length
-                # This represents the typical scale of individual arrows
-                avg_segment_length = np.mean(magnitudes) if len(magnitudes) > 0 else 1.0
-
-                # Set defaults based on geometry:
-                # - line_width: relative of the bounding box diagonal (scales with overall data size)
-                # - arrow_head_size: relative of average segment length (scales with typical arrow size)
-                computed_line_width = self.ArrowShaftRadiusRelative * bbox_diagonal
-                computed_arrow_head_size = self.ArrowHeadSizeRelative * avg_segment_length
-
-            # Default values for arrow geometry if not provided
             final_arrow_head_size = (
-                arrow_head_size if arrow_head_size is not None else computed_arrow_head_size
+                arrow_head_size
+                if arrow_head_size is not None
+                else computed_arrow_head_size
             )
             shaft_radius_from_line_width = (
                 line_width if line_width is not None else computed_line_width
@@ -783,25 +879,28 @@ class ExPlotter:
             final_arrow_tip_length_ratio = 0.25
 
             arrow_geom = pv.Arrow(
-                direction=(1.0, 0.0, 0.0),  # Template direction for a unit arrow
+                direction=(1.0, 0.0, 0.0),
                 tip_length=final_arrow_tip_length_ratio,
                 tip_radius=final_arrow_head_size,
                 shaft_radius=shaft_radius_from_line_width,
-                scale=1.0,  # Template is unit scale; glyph 'scale_factor' handles actual length.
+                scale=1.0,
             )
 
             norm_directions = np.zeros_like(directions, dtype=float)
             non_zero_mag_mask = magnitudes > 1e-9
-
             if np.any(non_zero_mag_mask):
                 valid_magnitudes_for_division = magnitudes[non_zero_mag_mask]
                 if valid_magnitudes_for_division.ndim == 1:
-                    valid_magnitudes_for_division = valid_magnitudes_for_division[:, np.newaxis]
+                    valid_magnitudes_for_division = (
+                        valid_magnitudes_for_division[:, np.newaxis]
+                    )
                 norm_directions[non_zero_mag_mask] = (
-                    directions[non_zero_mag_mask] / valid_magnitudes_for_division
+                    directions[non_zero_mag_mask]
+                    / valid_magnitudes_for_division
                 )
-
-            norm_directions = np.nan_to_num(norm_directions, nan=0.0, posinf=0.0, neginf=0.0)
+            norm_directions = np.nan_to_num(
+                norm_directions, nan=0.0, posinf=0.0, neginf=0.0
+            )
 
             glyph_points_pd = pv.PolyData(pts1_arr)
             glyph_points_pd.point_data["vectors"] = norm_directions
@@ -809,16 +908,15 @@ class ExPlotter:
             glyph_points_pd.point_data["scale_factor"] = magnitudes
 
             pv_call_kwargs = kwargs.copy()
-            pv_call_kwargs["color"] = _final_color
-            if line_width is not None:
+            if (
+                line_width is not None
+            ):  # For arrow edges if rendered as wireframe/etc.
                 pv_call_kwargs["line_width"] = line_width
-
             pv_call_kwargs.setdefault("style", "surface")
 
-            # Determine PyVista shading parameters and lighting for arrows
+            # Shading logic (copied and adapted from original)
             pv_smooth_shading_arrow = None
             pv_pbr_arrow = None
-
             if shading is not None:
                 shading_lower_arrow = shading.lower()
                 if shading_lower_arrow == "albedo":
@@ -828,20 +926,18 @@ class ExPlotter:
                 elif shading_lower_arrow == "flat":
                     pv_smooth_shading_arrow = False
                     pv_pbr_arrow = False
-                    if "lighting" not in kwargs:  # Default to lit for this style
+                    if "lighting" not in pv_call_kwargs:
                         pv_call_kwargs["lighting"] = True
                 elif shading_lower_arrow == "smooth":
                     pv_smooth_shading_arrow = True
                     pv_pbr_arrow = False
-                    if "lighting" not in kwargs:  # Default to lit for this style
+                    if "lighting" not in pv_call_kwargs:
                         pv_call_kwargs["lighting"] = True
                 elif shading_lower_arrow == "pbr":
-                    pv_smooth_shading_arrow = True  # PBR typically implies smooth shading
+                    pv_smooth_shading_arrow = True
                     pv_pbr_arrow = True
-                    if "lighting" not in kwargs:  # PBR implies lighting
+                    if "lighting" not in pv_call_kwargs:
                         pv_call_kwargs["lighting"] = True
-                # Else (unrecognized shading), defaults apply for smooth_shading/pbr.
-                # Lighting from original kwargs or add_mesh default.
 
             pv_call_kwargs["smooth_shading"] = pv_smooth_shading_arrow
             pv_call_kwargs["pbr"] = pv_pbr_arrow
@@ -849,39 +945,94 @@ class ExPlotter:
                 pv_call_kwargs["metallic"] = metallic
                 pv_call_kwargs["roughness"] = roughness
             else:
-                # Ensure metallic/roughness are not passed if PBR is not active or shading is None or albedo
                 pv_call_kwargs.pop("metallic", None)
                 pv_call_kwargs.pop("roughness", None)
+
+            # Color handling for arrows
+            if _multiple_colors_rgb_uint8 is not None:
+                glyph_points_pd.point_data["actor_colors"] = (
+                    _multiple_colors_rgb_uint8
+                )
+                pv_call_kwargs.pop(
+                    "color", None
+                )  # Ensure single color is not used
+            elif _single_color_rgb_float is not None:
+                pv_call_kwargs["color"] = _single_color_rgb_float
 
             glyphs_mesh = glyph_points_pd.glyph(
                 geom=arrow_geom,
                 orient="vectors",
-                scale="scale_factor",  # Use magnitudes to scale the unit arrow template
+                scale="scale_factor",
                 factor=1.0,
             )
 
-            if glyphs_mesh.n_points > 0:  # Only add if glyphs were actually created
-                obj = self.m_plotter.add_mesh(glyphs_mesh, **pv_call_kwargs)
+            if glyphs_mesh.n_points > 0:
+                if _multiple_colors_rgb_uint8 is not None:
+                    obj = self.m_plotter.add_mesh(
+                        glyphs_mesh,
+                        scalars="actor_colors",
+                        rgb=True,
+                        **pv_call_kwargs,
+                    )
+                else:  # Single color (either from _single_color_rgb_float or already in pv_call_kwargs)
+                    obj = self.m_plotter.add_mesh(glyphs_mesh, **pv_call_kwargs)
         else:
-            # Original functionality: add lines
+            # Lines
             _effective_width_for_add_lines = 1.0
             if line_width is not None:
                 _effective_width_for_add_lines = line_width
 
-            if pts1_arr.ndim == 1:
-                pts1_arr = pts1_arr[np.newaxis, :]
-            if pts2_arr.ndim == 1:
-                pts2_arr = pts2_arr[np.newaxis, :]
+            if _multiple_colors_rgb_uint8 is not None:
+                pts_for_polydata = np.column_stack(
+                    (pts1_arr, pts2_arr)
+                ).reshape((-1, 3))
+                line_connectivity = np.arange(2 * num_segments).reshape(
+                    (num_segments, 2)
+                )
+                cells_arg = np.hstack(
+                    (
+                        np.full((num_segments, 1), 2, dtype=int),
+                        line_connectivity,
+                    )
+                ).ravel()
 
-            if pts1_arr.shape[0] > 0:  # Check if there are any points to draw
-                pts_input = np.column_stack((pts1_arr, pts2_arr)).reshape((-1, 3))
+                poly_lines = pv.PolyData(pts_for_polydata, lines=cells_arg)
+                poly_lines.cell_data["actor_colors"] = (
+                    _multiple_colors_rgb_uint8
+                )
+
+                line_mesh_kwargs = kwargs.copy()
+                line_mesh_kwargs.pop("color", None)
+                line_mesh_kwargs["line_width"] = _effective_width_for_add_lines
+                line_mesh_kwargs["style"] = (
+                    "wireframe"  # Ensure lines are rendered
+                )
+                line_mesh_kwargs.setdefault("render_lines_as_tubes", False)
+
+                obj = self.m_plotter.add_mesh(
+                    poly_lines,
+                    scalars="actor_colors",
+                    rgb=True,
+                    **line_mesh_kwargs,
+                )
+            else:  # Single color for lines
+                pts_input = np.column_stack((pts1_arr, pts2_arr)).reshape(
+                    (-1, 3)
+                )
                 obj = self.m_plotter.add_lines(
-                    pts_input, color=_final_color, width=_effective_width_for_add_lines, **kwargs
+                    pts_input,
+                    color=_single_color_rgb_float,
+                    width=_effective_width_for_add_lines,
+                    **kwargs,
                 )
         return obj
 
     def add_points(
-        self, pts: np.ndarray, color3f: np.ndarray = None, style: str = "points", **kwargs
+        self,
+        pts: np.ndarray,
+        color3f: np.ndarray = None,
+        style: str = "points",
+        **kwargs,
     ) -> pv.Actor:
         """add points to the plot
 
@@ -1001,7 +1152,11 @@ class ExPlotter:
         return actor
 
     def set_camera_transform_by_vectors(
-        self, view_dir: np.ndarray, up_dir: np.ndarray, position: np.ndarray, focal_distance=None
+        self,
+        view_dir: np.ndarray,
+        up_dir: np.ndarray,
+        position: np.ndarray,
+        focal_distance=None,
     ):
         camera_set_transform_by_vectors(
             self.m_plotter.camera,
