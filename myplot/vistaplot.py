@@ -677,6 +677,12 @@ class ExPlotter:
     ) -> pv.AxesActor:
         if line_width is None:
             line_width = 1.0
+        return self.add_axes_many(
+            [np.atleast_2d(origin)],
+            [np.atleast_2d(xyz_dirs)],
+            axis_length=axis_length,
+            line_width=line_width,
+        )
 
         # xyz_dirs = np.atleast_2d(xyz_dirs)
         # origin = np.array(origin).flatten()
@@ -686,13 +692,13 @@ class ExPlotter:
         # pts_draw = np.column_stack([pts1, pts2]).reshape(-1,3)
         # axis_actor = self.m_plotter.add_lines(pts_draw, color=np.eye(3))
 
-        axis_actor = make_axis(
-            origin, xyz_dirs, axlen=axis_length, thickness=line_width
-        )
-        axis_actor.SetConeResolution(4)
-        axis_actor.SetConeRadius(0.01)
-        self.m_plotter.add_actor(axis_actor)
-        return axis_actor
+        # axis_actor = make_axis(
+        #     origin, xyz_dirs, axlen=axis_length, thickness=line_width
+        # )
+        # axis_actor.SetConeResolution(4)
+        # axis_actor.SetConeRadius(0.01)
+        # self.m_plotter.add_actor(axis_actor)
+        # return axis_actor
 
     def add_axes_many(
         self,
