@@ -1176,3 +1176,9 @@ class ExPlotter:
     def set_camera_transform_by_4x4(self, gltf_transmat: np.ndarray):
         camera_set_transform_by_4x4(self.m_plotter.camera, gltf_transmat)
         self.m_plotter.camera.Modified()
+        
+    def show(self):
+        """Show the plotter window."""
+        if self.m_plotter is not None and isinstance(self.m_plotter, pv.BasePlotter):
+            # background plotter do not need this, just for std plotter
+            self.m_plotter.show()
